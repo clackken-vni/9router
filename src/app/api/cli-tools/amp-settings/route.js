@@ -78,6 +78,10 @@ export async function GET() {
     const secrets = await readSecrets();
     const has9Router = !!(settings?.["amp.url"]);
 
+    // Also load model mappings from 9router settings
+    const { getSettings } = await import("@/lib/localDb");
+    const routerSettings = await getSettings();
+
     return NextResponse.json({
       installed: true,
       settings: settings,
@@ -85,6 +89,7 @@ export async function GET() {
       has9Router: has9Router,
       settingsPath: getAmpSettingsPath(),
       secretsPath: getAmpSecretsPath(),
+      modelMappings: routerSettings.ampModelMappings || {},
     });
   } catch (error) {
     console.log("Error checking amp settings:", error);
@@ -127,46 +132,22 @@ export async function POST(request) {
       }
     }
 
-    // Update settings with new URL
+    // Update settings with new URL and API key
+    const localApiKey = apiKey || "sk_9router";
     const newSettings = {
       ...currentSettings,
       "amp.url": url,
+      "amp.apiKey": localApiKey,
     };
 
     // Write settings
     await fs.writeFile(settingsPath, JSON.stringify(newSettings, null, 2));
 
-    // Update secrets if API key provided
-    if (apiKey) {
-      let currentSecrets = {};
-      try {
-        const content = await fs.readFile(secretsPath, "utf-8");
-        currentSecrets = JSON.parse(content);
-      } catch (error) {
-        if (error.code !== "ENOENT") {
-          throw error;
-        }
-      }
-
-      // Create the key in format: apiKey@<url>
-      const secretKey = `apiKey@${url}`;
-      const newSecrets = {
-        ...currentSecrets,
-        [secretKey]: apiKey,
-      };
-
-      // Write secrets
-      await fs.writeFile(secretsPath, JSON.stringify(newSecrets, null, 2));
-    }
-
-    // Save model mappings to 9router settings if provided
-    if (modelMappings && typeof modelMappings === "object") {
-      const { getSettings, updateSettings } = await import("@/lib/localDb");
-      const settings = await getSettings();
-      await updateSettings({
-        ampModelMappings: modelMappings,
-      });
-    }
+    // Always save model mappings to 9router settings (even if empty)
+    const { updateSettings } = await import("@/lib/localDb");
+    await updateSettings({
+      ampModelMappings: modelMappings || {},
+    });
 
     return NextResponse.json({
       success: true,

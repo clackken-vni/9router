@@ -59,8 +59,12 @@ export default function AmpToolCard({
     if (isExpanded && !ampStatus) {
       checkAmpStatus();
       fetchModelAliases();
+      loadModelMappings();
     }
-    if (isExpanded) fetchModelAliases();
+    if (isExpanded) {
+      fetchModelAliases();
+      loadModelMappings();
+    }
   }, [isExpanded]);
 
   const fetchModelAliases = async () => {
@@ -70,6 +74,23 @@ export default function AmpToolCard({
       if (res.ok) setModelAliases(data.aliases || {});
     } catch (error) {
       console.log("Error fetching model aliases:", error);
+    }
+  };
+
+  const loadModelMappings = async () => {
+    try {
+      const res = await fetch("/api/settings");
+      const data = await res.json();
+      if (res.ok && data.ampModelMappings) {
+        // Load saved model mappings into the component state
+        Object.entries(data.ampModelMappings).forEach(([alias, model]) => {
+          if (model) {
+            onModelMappingChange?.(alias, model);
+          }
+        });
+      }
+    } catch (error) {
+      console.log("Error loading model mappings:", error);
     }
   };
 

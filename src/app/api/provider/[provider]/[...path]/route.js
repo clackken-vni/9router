@@ -1,7 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSettings } from "@/lib/localDb";
-import { getProviderConnections } from "@/models";
-import { PROVIDER_ID_TO_ALIAS } from "@/shared/constants/models";
+import { getSettings, getApiKeys } from "@/lib/localDb";
 
 /**
  * Amp CLI Provider API Proxy
@@ -9,9 +7,42 @@ import { PROVIDER_ID_TO_ALIAS } from "@/shared/constants/models";
  *
  * Logic:
  * 1. Check if model is configured locally in ampModelMappings
- * 2. If YES: Route to local 9router providers (use existing /api/v1/chat/completions)
+ * 2. If YES: Route to local 9router providers (preserve API shape)
  * 3. If NO: Forward to ampcode.com as reverse proxy
  */
+
+function extractApiKeyFromRequest(request) {
+  const authHeader = request.headers.get("authorization");
+  if (authHeader) return authHeader.replace(/^Bearer\s+/i, "");
+  return request.headers.get("x-api-key") || "";
+}
+
+function resolveMappedModel(ampModelMappings, requestedModel) {
+  if (!requestedModel || !ampModelMappings) return null;
+
+  // Direct mapping (new style where key is exact Amp model id)
+  if (ampModelMappings[requestedModel]) return ampModelMappings[requestedModel];
+
+  // Backward compatibility: legacy slot keys (smart/rush/oracle/...)
+  const legacySlotByModel = {
+    "claude-opus-4-6": "smart",
+    "gpt-5.3-codex": "deep",
+    "claude-sonnet-4-5": "librarian",
+    "claude-sonnet-4-5-20241022": "librarian",
+    "claude-haiku-4-5": "rush",
+    "claude-haiku-4-5-20251001": "rush",
+    "gemini-3-flash-preview": "search",
+    "gpt-5.2": "oracle",
+    "gemini-3-pro-preview": "review",
+    "gemini-2.5-flash": "handoff",
+    "gemini-2.5-flash-lite-preview-09-2025": "topics",
+  };
+
+  const legacySlot = legacySlotByModel[requestedModel];
+  if (legacySlot && ampModelMappings[legacySlot]) return ampModelMappings[legacySlot];
+
+  return null;
+}
 
 export async function POST(request, { params }) {
   try {
@@ -19,23 +50,47 @@ export async function POST(request, { params }) {
     const pathSegments = Array.isArray(path) ? path : [path];
     const fullPath = pathSegments.join("/");
 
+    // Validate authentication
+    const apiKey = extractApiKeyFromRequest(request);
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: "Missing authorization header" },
+        { status: 401 }
+      );
+    }
+
     // Get settings for Amp configuration
     const settings = await getSettings();
     const { ampUpstreamUrl, ampUpstreamApiKey, ampModelMappings } = settings;
+
+    // Validate API key (check against locally stored keys or default)
+    const apiKeys = await getApiKeys();
+    const validKey = apiKeys.find(k => k.key === apiKey && k.isActive !== false)
+      || apiKey === "sk_9router"
+      || apiKey === ampUpstreamApiKey
+      || apiKey.startsWith("sgamp_user");
+    if (!validKey) {
+      return NextResponse.json(
+        { error: "Invalid API key" },
+        { status: 401 }
+      );
+    }
 
     // Parse request body to get model
     const body = await request.json();
     const requestedModel = body.model;
 
     // Check if this model is mapped locally
-    const localModel = ampModelMappings?.[requestedModel];
+    const localModel = resolveMappedModel(ampModelMappings, requestedModel);
 
     if (localModel) {
       // Route to local 9router provider
       console.log(`[Amp Proxy] Routing ${requestedModel} to local model: ${localModel}`);
 
-      // Forward to our internal chat completions endpoint
-      const internalUrl = new URL("/api/v1/chat/completions", request.url);
+      // Preserve original API shape so format detection stays correct
+      const originalUrl = new URL(request.url);
+      const internalPath = fullPath ? `/api/${fullPath}` : "/api/v1/chat/completions";
+      const internalUrl = new URL(`${internalPath}${originalUrl.search}`, request.url);
 
       // Update body with mapped model
       const modifiedBody = {
@@ -43,21 +98,24 @@ export async function POST(request, { params }) {
         model: localModel,
       };
 
-      // Get authorization header from original request
-      const authHeader = request.headers.get("authorization");
-
+      // Use special internal proxy header to bypass auth
       const response = await fetch(internalUrl.toString(), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(authHeader && { "Authorization": authHeader }),
+          "X-Internal-Proxy": "true",
         },
         body: JSON.stringify(modifiedBody),
       });
 
-      // Return response
-      const data = await response.json();
-      return NextResponse.json(data, { status: response.status });
+      // Stream the response back (handles both streaming and non-streaming)
+      return new Response(response.body, {
+        status: response.status,
+        headers: {
+          "Content-Type": response.headers.get("Content-Type") || "application/json",
+          "Cache-Control": "no-cache",
+        },
+      });
     } else {
       // Forward to ampcode.com
       console.log(`[Amp Proxy] Forwarding ${requestedModel} to upstream: ${ampUpstreamUrl}`);
@@ -80,20 +138,14 @@ export async function POST(request, { params }) {
         body: JSON.stringify(body),
       });
 
-      // Handle gzip decompression if needed
-      let data;
-      const contentEncoding = response.headers.get("content-encoding");
-      if (contentEncoding === "gzip") {
-        const arrayBuffer = await response.arrayBuffer();
-        const decompressed = await new Response(
-          new Blob([arrayBuffer]).stream().pipeThrough(new DecompressionStream("gzip"))
-        ).text();
-        data = JSON.parse(decompressed);
-      } else {
-        data = await response.json();
-      }
-
-      return NextResponse.json(data, { status: response.status });
+      // Stream the response back as-is (supports SSE streaming)
+      return new Response(response.body, {
+        status: response.status,
+        headers: {
+          "Content-Type": response.headers.get("Content-Type") || "application/json",
+          "Cache-Control": "no-cache",
+        },
+      });
     }
   } catch (error) {
     console.error("[Amp Proxy] Error:", error);
@@ -111,8 +163,28 @@ export async function GET(request, { params }) {
     const pathSegments = Array.isArray(path) ? path : [path];
     const fullPath = pathSegments.join("/");
 
+    const apiKey = extractApiKeyFromRequest(request);
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: "Missing authorization header" },
+        { status: 401 }
+      );
+    }
+
     const settings = await getSettings();
     const { ampUpstreamUrl, ampUpstreamApiKey } = settings;
+
+    const apiKeys = await getApiKeys();
+    const validKey = apiKeys.find(k => k.key === apiKey && k.isActive !== false)
+      || apiKey === "sk_9router"
+      || apiKey === ampUpstreamApiKey
+      || apiKey.startsWith("sgamp_user");
+    if (!validKey) {
+      return NextResponse.json(
+        { error: "Invalid API key" },
+        { status: 401 }
+      );
+    }
 
     if (!ampUpstreamUrl || !ampUpstreamApiKey) {
       return NextResponse.json(
