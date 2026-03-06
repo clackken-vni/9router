@@ -101,6 +101,14 @@ export const CLI_TOOLS = {
       url: "AMP_URL",
       apiKey: "AMP_API_KEY",
     },
+    defaultModels: [
+      { id: "smart", name: "Smart Mode", alias: "smart", defaultValue: "gc/gemini-3-pro-preview", description: "Uses Google/Gemini models (Gemini 3 Pro)" },
+      { id: "rush", name: "Rush Mode", alias: "rush", defaultValue: "cc/claude-haiku-4-5-20251001", description: "Uses Anthropic/Claude models (Claude Haiku 4.5)" },
+      { id: "oracle", name: "Oracle Subagent", alias: "oracle", defaultValue: "cx/gpt-5.2", description: "Uses OpenAI/GPT models (GPT-5 medium reasoning)" },
+      { id: "librarian", name: "Librarian Subagent", alias: "librarian", defaultValue: "cc/claude-sonnet-4-6", description: "Uses Anthropic/Claude models (Claude Sonnet 4.5)" },
+      { id: "search", name: "Search Subagent", alias: "search", defaultValue: "cc/claude-haiku-4-5-20251001", description: "Uses Anthropic/Claude models (Claude Haiku 4.5)" },
+      { id: "review", name: "Review Feature", alias: "review", defaultValue: "gc/gemini-2.5-flash-lite", description: "Uses Google/Gemini models (Gemini 2.5 Flash-Lite)" },
+    ],
   },
   cursor: {
     id: "cursor",

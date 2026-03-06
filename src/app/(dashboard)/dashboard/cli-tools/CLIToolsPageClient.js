@@ -182,7 +182,18 @@ export default function CLIToolsPageClient({ machineId }) {
       case "openclaw":
         return <OpenClawToolCard key={toolId} {...commonProps} activeProviders={getActiveProviders()} hasActiveProviders={hasActiveProviders} cloudEnabled={cloudEnabled} initialStatus={toolStatuses.openclaw} />;
       case "amp":
-        return <AmpToolCard key={toolId} {...commonProps} cloudEnabled={cloudEnabled} initialStatus={toolStatuses.amp} />;
+        return (
+          <AmpToolCard
+            key={toolId}
+            {...commonProps}
+            activeProviders={getActiveProviders()}
+            modelMappings={modelMappings[toolId] || {}}
+            onModelMappingChange={(alias, target) => handleModelMappingChange(toolId, alias, target)}
+            hasActiveProviders={hasActiveProviders}
+            cloudEnabled={cloudEnabled}
+            initialStatus={toolStatuses.amp}
+          />
+        );
       default:
         return <DefaultToolCard key={toolId} toolId={toolId} {...commonProps} activeProviders={getActiveProviders()} cloudEnabled={cloudEnabled} tunnelEnabled={tunnelEnabled} />;
     }

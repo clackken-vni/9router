@@ -98,7 +98,7 @@ export async function GET() {
 // POST - Write new settings and secrets
 export async function POST(request) {
   try {
-    const { url, apiKey } = await request.json();
+    const { url, apiKey, modelMappings } = await request.json();
 
     if (!url || typeof url !== "string") {
       return NextResponse.json(
@@ -157,6 +157,15 @@ export async function POST(request) {
 
       // Write secrets
       await fs.writeFile(secretsPath, JSON.stringify(newSecrets, null, 2));
+    }
+
+    // Save model mappings to 9router settings if provided
+    if (modelMappings && typeof modelMappings === "object") {
+      const { getSettings, updateSettings } = await import("@/lib/localDb");
+      const settings = await getSettings();
+      await updateSettings({
+        ampModelMappings: modelMappings,
+      });
     }
 
     return NextResponse.json({

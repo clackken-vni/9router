@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Card, Button, ManualConfigModal } from "@/shared/components";
+import { Card, Button, ManualConfigModal, ModelSelectModal } from "@/shared/components";
 import Image from "next/image";
 
 const CLOUD_URL = process.env.NEXT_PUBLIC_CLOUD_URL;
@@ -14,6 +14,10 @@ export default function AmpToolCard({
   apiKeys,
   cloudEnabled,
   initialStatus,
+  activeProviders,
+  modelMappings,
+  onModelMappingChange,
+  hasActiveProviders,
 }) {
   const [ampStatus, setAmpStatus] = useState(initialStatus || null);
   const [checkingAmp, setCheckingAmp] = useState(false);
@@ -24,6 +28,9 @@ export default function AmpToolCard({
   const [selectedApiKey, setSelectedApiKey] = useState("");
   const [showManualConfigModal, setShowManualConfigModal] = useState(false);
   const [customBaseUrl, setCustomBaseUrl] = useState("");
+  const [modalOpen, setModalOpen] = useState(false);
+  const [currentEditingAlias, setCurrentEditingAlias] = useState(null);
+  const [modelAliases, setModelAliases] = useState({});
 
   const getConfigStatus = () => {
     if (!ampStatus?.installed) return null;
@@ -51,8 +58,20 @@ export default function AmpToolCard({
   useEffect(() => {
     if (isExpanded && !ampStatus) {
       checkAmpStatus();
+      fetchModelAliases();
     }
+    if (isExpanded) fetchModelAliases();
   }, [isExpanded]);
+
+  const fetchModelAliases = async () => {
+    try {
+      const res = await fetch("/api/models/alias");
+      const data = await res.json();
+      if (res.ok) setModelAliases(data.aliases || {});
+    } catch (error) {
+      console.log("Error fetching model aliases:", error);
+    }
+  };
 
   const checkAmpStatus = async () => {
     setCheckingAmp(true);
@@ -89,7 +108,11 @@ export default function AmpToolCard({
       const res = await fetch("/api/cli-tools/amp-settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, apiKey: keyToUse }),
+        body: JSON.stringify({
+          url,
+          apiKey: keyToUse,
+          modelMappings: modelMappings || {}
+        }),
       });
       const data = await res.json();
       if (res.ok) {
@@ -118,6 +141,7 @@ export default function AmpToolCard({
       if (res.ok) {
         setMessage({ type: "success", text: "Settings reset successfully!" });
         setSelectedApiKey("");
+        tool.defaultModels?.forEach((model) => onModelMappingChange?.(model.alias, ""));
       } else {
         setMessage({ type: "error", text: data.error || "Failed to reset settings" });
       }
@@ -126,6 +150,15 @@ export default function AmpToolCard({
     } finally {
       setRestoring(false);
     }
+  };
+
+  const openModelSelector = (alias) => {
+    setCurrentEditingAlias(alias);
+    setModalOpen(true);
+  };
+
+  const handleModelSelect = (model) => {
+    if (currentEditingAlias) onModelMappingChange?.(currentEditingAlias, model.value);
   };
 
   // Generate config files content for manual copy
@@ -263,6 +296,46 @@ export default function AmpToolCard({
                     </span>
                   )}
                 </div>
+
+                {/* Model Mappings for Amp Modes */}
+                {tool.defaultModels && tool.defaultModels.map((model) => (
+                  <div key={model.alias} className="flex flex-col gap-1">
+                    <div className="flex items-center gap-2">
+                      <span className="w-32 shrink-0 text-sm font-semibold text-text-main text-right">{model.name}</span>
+                      <span className="material-symbols-outlined text-text-muted text-[14px]">arrow_forward</span>
+                      <input
+                        type="text"
+                        value={modelMappings?.[model.alias] || ""}
+                        onChange={(e) => onModelMappingChange?.(model.alias, e.target.value)}
+                        placeholder="provider/model-id"
+                        className="flex-1 px-2 py-1.5 bg-surface rounded border border-border text-xs focus:outline-none focus:ring-1 focus:ring-primary/50"
+                      />
+                      <button
+                        onClick={() => openModelSelector(model.alias)}
+                        disabled={!hasActiveProviders}
+                        className={`px-2 py-1.5 rounded border text-xs transition-colors shrink-0 whitespace-nowrap ${
+                          hasActiveProviders
+                            ? "bg-surface border-border text-text-main hover:border-primary cursor-pointer"
+                            : "opacity-50 cursor-not-allowed border-border"
+                        }`}
+                      >
+                        Select Model
+                      </button>
+                      {modelMappings?.[model.alias] && (
+                        <button
+                          onClick={() => onModelMappingChange?.(model.alias, "")}
+                          className="p-1 text-text-muted hover:text-red-500 rounded transition-colors"
+                          title="Clear"
+                        >
+                          <span className="material-symbols-outlined text-[14px]">close</span>
+                        </button>
+                      )}
+                    </div>
+                    {model.description && (
+                      <p className="text-xs text-text-muted ml-[140px]">{model.description}</p>
+                    )}
+                  </div>
+                ))}
               </div>
 
               {message && (
@@ -287,6 +360,16 @@ export default function AmpToolCard({
           )}
         </div>
       )}
+
+      <ModelSelectModal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        onSelect={handleModelSelect}
+        selectedModel={currentEditingAlias ? modelMappings?.[currentEditingAlias] : null}
+        activeProviders={activeProviders}
+        modelAliases={modelAliases}
+        title={`Select model for ${currentEditingAlias}`}
+      />
 
       <ManualConfigModal
         isOpen={showManualConfigModal}
