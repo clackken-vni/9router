@@ -39,7 +39,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   const clientRequestedStreaming = body.stream === true || sourceFormat === FORMATS.ANTIGRAVITY || sourceFormat === FORMATS.GEMINI || sourceFormat === FORMATS.GEMINI_CLI;
   const providerRequiresStreaming = provider === "openai" || provider === "codex";
-  const stream = providerRequiresStreaming ? true : (body.stream !== false);
+  const stream = providerRequiresStreaming ? true : (body.stream === true);
 
   const reqLogger = await createRequestLogger(sourceFormat, targetFormat, model);
   if (clientRawRequest) reqLogger.logClientRawRequest(clientRawRequest.endpoint, clientRawRequest.body, clientRawRequest.headers);
@@ -150,6 +150,16 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   // True non-streaming response
   if (!stream) {
+    return handleNonStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat, reqLogger, trackDone, appendLog });
+  }
+
+  // Streaming response - validate upstream content-type
+  const contentType = providerResponse.headers.get("content-type") || "";
+  const isSSEResponse = contentType.includes("text/event-stream");
+
+  // If stream mode is true but upstream is not SSE, fallback to non-streaming handler
+  if (stream && !isSSEResponse) {
+    log?.warn?.("STREAM", `Expected SSE but got ${contentType}, routing to non-streaming handler`);
     return handleNonStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat, reqLogger, trackDone, appendLog });
   }
 
