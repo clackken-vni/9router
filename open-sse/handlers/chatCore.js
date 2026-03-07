@@ -15,6 +15,7 @@ import { buildRequestDetail, extractRequestConfig } from "./chatCore/requestDeta
 import { handleForcedSSEToJson } from "./chatCore/sseToJsonHandler.js";
 import { handleNonStreamingResponse } from "./chatCore/nonStreamingHandler.js";
 import { handleStreamingResponse, buildOnStreamComplete } from "./chatCore/streamingHandler.js";
+import { handleJsonToSSE } from "./chatCore/jsonToSseHandler.js";
 
 /**
  * Core chat handler - shared between SSE and Worker
@@ -157,10 +158,10 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   const contentType = providerResponse.headers.get("content-type") || "";
   const isSSEResponse = contentType.includes("text/event-stream");
 
-  // If stream mode is true but upstream is not SSE, fallback to non-streaming handler
+  // If stream mode is true but upstream is not SSE, convert JSON to SSE
   if (stream && !isSSEResponse) {
-    log?.warn?.("STREAM", `Expected SSE but got ${contentType}, routing to non-streaming handler`);
-    return handleNonStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat, reqLogger, trackDone, appendLog });
+    log?.warn?.("STREAM", `Expected SSE but got ${contentType}, converting JSON to SSE`);
+    return handleJsonToSSE({ ...sharedCtx, providerResponse, sourceFormat, targetFormat, reqLogger, trackDone, appendLog });
   }
 
   // Streaming response

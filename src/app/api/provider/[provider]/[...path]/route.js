@@ -109,12 +109,20 @@ export async function POST(request, { params }) {
       });
 
       // Stream the response back (handles both streaming and non-streaming)
+      const headers = {
+        "Content-Type": response.headers.get("Content-Type") || "application/json",
+        "Cache-Control": "no-cache",
+      };
+
+      // Preserve SSE headers if present
+      if (response.headers.get("Content-Type")?.includes("text/event-stream")) {
+        headers["Connection"] = "keep-alive";
+        headers["Access-Control-Allow-Origin"] = "*";
+      }
+
       return new Response(response.body, {
         status: response.status,
-        headers: {
-          "Content-Type": response.headers.get("Content-Type") || "application/json",
-          "Cache-Control": "no-cache",
-        },
+        headers,
       });
     } else {
       // Forward to ampcode.com
