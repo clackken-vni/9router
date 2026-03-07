@@ -482,8 +482,10 @@ export default function PlaygroundPage() {
   };
 
   return (
-    <div className="flex flex-col gap-6">
-      <Card title="Playground" subtitle="Quickly test providers and models" icon="experiment">
+    <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+      {/* Left Column - Input Controls */}
+      <div className="flex flex-col gap-6">
+        <Card title="Playground" subtitle="Quickly test providers and models" icon="experiment">
         <div className="flex flex-col gap-4">
           <Select
             label="Model"
@@ -611,8 +613,8 @@ export default function PlaygroundPage() {
         </div>
       </Card>
 
-      {batchMode && (
-        <Card title="Batch Evaluation" subtitle="Run multiple prompts sequentially" icon="playlist_play">
+        {batchMode && (
+          <Card title="Batch Evaluation" subtitle="Run multiple prompts sequentially" icon="playlist_play">
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-1.5">
               <label className="text-sm font-medium text-text-main">Prompts (one per line)</label>
@@ -659,7 +661,11 @@ export default function PlaygroundPage() {
             )}
           </div>
         </Card>
-      )}
+        )}
+      </div>
+
+      {/* Right Column - Output & Results */}
+      <div className="flex flex-col gap-6">
 
       {!batchMode && (
         <>
@@ -738,7 +744,7 @@ export default function PlaygroundPage() {
         </>
       )}
 
-      <Card title="Recent History" icon="history">
+        <Card title="Recent History" icon="history">
         <div className="flex flex-col gap-2">
           {history.length === 0 ? (
             <p className="text-sm text-text-muted">No history yet.</p>
@@ -764,6 +770,7 @@ export default function PlaygroundPage() {
           )}
         </div>
       </Card>
+      </div>
     </div>
   );
 }
