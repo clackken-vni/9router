@@ -44,23 +44,32 @@ class TrayManager {
    * Create a simple tray icon
    */
   createTrayIcon() {
-    // Create a simple 16x16 icon with text "9R"
-    const canvas = require('canvas');
-    const canvasEl = canvas.createCanvas(16, 16);
-    const ctx = canvasEl.getContext('2d');
+    try {
+      // Try to create a simple 16x16 icon with text "9R"
+      const canvas = require('canvas');
+      const canvasEl = canvas.createCanvas(16, 16);
+      const ctx = canvasEl.getContext('2d');
 
-    // Background
-    ctx.fillStyle = '#3b82f6';
-    ctx.fillRect(0, 0, 16, 16);
+      // Background
+      ctx.fillStyle = '#3b82f6';
+      ctx.fillRect(0, 0, 16, 16);
 
-    // Text
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 10px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('9R', 8, 8);
+      // Text
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('9R', 8, 8);
 
-    return nativeImage.createFromDataURL(canvasEl.toDataURL());
+      return nativeImage.createFromDataURL(canvasEl.toDataURL());
+    } catch (error) {
+      console.warn('Failed to create canvas icon, using fallback:', error.message);
+
+      // Fallback: Create a simple colored square
+      // This is a 16x16 blue square as a base64 PNG
+      const base64Icon = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAAAdgAAAHYBTnsmCAAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAAAYdEVYdFRpdGxlADlSb3V0ZXIgVHJheSBJY29uP5cK3wAAABl0RVh0QXV0aG9yADlSb3V0ZXIgRGV2ZWxvcGVy5kN5HwAAADhJREFUOI1jYBgFoyFABjDiU8DMzMyITy0DAwMDEz6FjIyMjPgUMjAwMDDiU8jIyMiITyEDAwPDKAAA8KgCEX7E3bQAAAAASUVORK5CYII=';
+      return nativeImage.createFromDataURL(base64Icon);
+    }
   }
 
   /**
@@ -247,7 +256,17 @@ class TrayManager {
     menuTemplate.push({
       label: 'Open Dashboard',
       click: () => {
-        require('open')(`http://localhost:${this.port}/dashboard`);
+        try {
+          require('open')(`http://localhost:${this.port}/dashboard`);
+        } catch (error) {
+          console.error('Failed to open dashboard:', error);
+          // Fallback: Try to show the window if available
+          const { BrowserWindow } = require('electron');
+          const windows = BrowserWindow.getAllWindows();
+          if (windows.length > 0) {
+            windows[0].show();
+          }
+        }
       }
     });
 
@@ -376,7 +395,11 @@ class TrayManager {
       {
         label: 'Open Dashboard',
         click: () => {
-          require('open')(`http://localhost:${this.port}/dashboard`);
+          try {
+            require('open')(`http://localhost:${this.port}/dashboard`);
+          } catch (error) {
+            console.error('Failed to open dashboard:', error);
+          }
         }
       },
       { type: 'separator' },
