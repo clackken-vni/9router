@@ -37,27 +37,30 @@ const CLAUDE_CONFIG = {
  * @returns {Object} Usage data with quotas
  */
 export async function getUsageForProvider(connection) {
-  const { provider, accessToken, providerSpecificData } = connection;
+  const { provider, accessToken, apiKey, providerSpecificData } = connection;
+
+  // Support both accessToken and apiKey fields
+  const token = accessToken || apiKey;
 
   switch (provider) {
     case "github":
-      return await getGitHubUsage(accessToken, providerSpecificData);
+      return await getGitHubUsage(token, providerSpecificData);
     case "gemini-cli":
-      return await getGeminiUsage(accessToken);
+      return await getGeminiUsage(token);
     case "antigravity":
-      return await getAntigravityUsage(accessToken);
+      return await getAntigravityUsage(token);
     case "claude":
-      return await getClaudeUsage(accessToken);
+      return await getClaudeUsage(token);
     case "codex":
-      return await getCodexUsage(accessToken);
+      return await getCodexUsage(token);
     case "kiro":
-      return await getKiroUsage(accessToken, providerSpecificData);
+      return await getKiroUsage(token, providerSpecificData);
     case "qwen":
-      return await getQwenUsage(accessToken, providerSpecificData);
+      return await getQwenUsage(token, providerSpecificData);
     case "iflow":
-      return await getIflowUsage(accessToken);
+      return await getIflowUsage(token);
     case "ramclouds":
-      return await getRamcloudsUsage(accessToken);
+      return await getRamcloudsUsage(token);
     default:
       return { message: `Usage API not implemented for ${provider}` };
   }
@@ -672,8 +675,16 @@ async function getRamcloudsUsage(apiKey) {
 
     if (!data.data || data.data.length === 0) {
       return {
-        message: "No usage data available",
-        quotas: {}
+        message: "No usage data available yet",
+        plan: "Active",
+        quotas: {
+          tokens: {
+            used: 0,
+            total: 0,
+            remaining: 0,
+            unlimited: false,
+          }
+        }
       };
     }
 

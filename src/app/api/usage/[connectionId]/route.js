@@ -13,7 +13,7 @@ async function refreshAndUpdateCredentials(connection) {
 
   // Build credentials object from connection
   const credentials = {
-    accessToken: connection.accessToken,
+    accessToken: connection.accessToken || connection.apiKey, // Support both accessToken and apiKey
     refreshToken: connection.refreshToken,
     expiresAt: connection.expiresAt || connection.tokenExpiresAt,
     providerSpecificData: connection.providerSpecificData,
