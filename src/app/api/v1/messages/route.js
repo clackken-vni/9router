@@ -32,6 +32,7 @@ export async function OPTIONS() {
  */
 export async function POST(request) {
   await ensureInitialized();
+  const isInternalProxy = request.headers.get("x-internal-proxy") === "true";
 
   // Debug: Log incoming request for Librarian
   try {
@@ -60,6 +61,7 @@ export async function POST(request) {
       console.log("[LIBRARIAN DEBUG] /v1/messages");
       console.log("=".repeat(80));
       console.log("Model:", model);
+      console.log("Internal Proxy:", isInternalProxy);
       console.log("Headers:", JSON.stringify(headers, null, 2));
       
       const bodyPreview = { ...body };

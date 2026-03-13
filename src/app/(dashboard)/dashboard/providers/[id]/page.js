@@ -957,11 +957,21 @@ function CompatibleModelsSection({ providerStorageAlias, providerDisplayAlias, m
     return parts[parts.length - 1];
   };
 
-  const resolveAlias = (modelId) => {
+  const resolveAlias = (modelId, takenAliases = new Set(Object.keys(modelAliases))) => {
     const baseAlias = generateDefaultAlias(modelId);
-    if (!modelAliases[baseAlias]) return baseAlias;
-    const prefixedAlias = `${providerDisplayAlias}-${baseAlias}`;
-    if (!modelAliases[prefixedAlias]) return prefixedAlias;
+    const preferred = [baseAlias, `${providerDisplayAlias}-${baseAlias}`];
+
+    for (const candidate of preferred) {
+      if (!takenAliases.has(candidate)) return candidate;
+    }
+
+    let index = 2;
+    while (index < 1000) {
+      const candidate = `${providerDisplayAlias}-${baseAlias}-${index}`;
+      if (!takenAliases.has(candidate)) return candidate;
+      index += 1;
+    }
+
     return null;
   };
 
@@ -1004,12 +1014,14 @@ function CompatibleModelsSection({ providerStorageAlias, providerDisplayAlias, m
         return;
       }
       let importedCount = 0;
+      const takenAliases = new Set(Object.keys(modelAliases));
       for (const model of models) {
         const modelId = model.id || model.name || model.model;
         if (!modelId) continue;
-        const resolvedAlias = resolveAlias(modelId);
+        const resolvedAlias = resolveAlias(modelId, takenAliases);
         if (!resolvedAlias) continue;
         await onSetAlias(modelId, resolvedAlias, providerStorageAlias);
+        takenAliases.add(resolvedAlias);
         importedCount += 1;
       }
       if (importedCount === 0) {

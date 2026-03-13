@@ -133,6 +133,75 @@ function logRequest(provider, fullPath, body, headers, response = null) {
   return logEntry;
 }
 
+function logLocalDelivery({ requestedModel, localModel, internalUrl, modifiedBody }) {
+  const timestamp = new Date().toISOString();
+  console.log("\n" + "▓".repeat(72));
+  console.log(`[${timestamp}] [AMP LOCAL DELIVERY]`);
+  console.log(`Requested:    ${requestedModel || "(none)"}`);
+  console.log(`Delivered To: ${localModel || "(none)"}`);
+  console.log(`Internal URL: ${internalUrl}`);
+  console.log(`Body Model:   ${modifiedBody?.model || "(none)"}`);
+  console.log(`Stream:       ${modifiedBody?.stream}`);
+  console.log(`Tools:        ${(modifiedBody?.tools || []).length}`);
+  console.log("▓".repeat(72) + "\n");
+  try {
+    addDebugLog("amp-local-delivery", {
+      timestamp,
+      requestedModel,
+      localModel,
+      internalUrl,
+      bodyModel: modifiedBody?.model || null,
+      stream: modifiedBody?.stream,
+      tools: (modifiedBody?.tools || []).length,
+    });
+  } catch {}
+}
+
+async function buildLoggedProxyResponse(response, meta) {
+  const contentType = response.headers.get("Content-Type") || response.headers.get("content-type") || "application/json";
+  const isSSE = contentType.includes("text/event-stream");
+  const cloned = response.clone();
+  let preview = null;
+
+  try {
+    if (isSSE) {
+      preview = "[stream opened: SSE response]";
+    } else if (contentType.includes("application/json")) {
+      preview = await cloned.json();
+    } else {
+      const text = await cloned.text();
+      preview = text.slice(0, 2000);
+    }
+  } catch (error) {
+    preview = { previewError: error.message };
+  }
+
+  const timestamp = new Date().toISOString();
+  console.log("\n" + "▒".repeat(72));
+  console.log(`[${timestamp}] [AMP LOCAL RESPONSE]`);
+  console.log(`Requested:    ${meta.requestedModel || "(none)"}`);
+  console.log(`Delivered To: ${meta.localModel || "(none)"}`);
+  console.log(`Status:       ${response.status}`);
+  console.log(`Content-Type: ${contentType}`);
+  console.log(`Preview:      ${typeof preview === "string" ? preview : JSON.stringify(preview).slice(0, 2000)}`);
+  console.log("▒".repeat(72) + "\n");
+
+  try {
+    addDebugLog("amp-local-response", {
+      timestamp,
+      ...meta,
+      status: response.status,
+      contentType,
+      preview,
+    });
+  } catch {}
+
+  return new Response(response.body, {
+    status: response.status,
+    headers: buildProxyResponseHeaders(response),
+  });
+}
+
 function extractApiKeyFromRequest(request) {
   const authHeader = request.headers.get("authorization");
   if (authHeader) return authHeader.replace(/^Bearer\s+/i, "");
@@ -176,11 +245,51 @@ function buildProxyResponseHeaders(response) {
   return headers;
 }
 
+function logRoutingDecision({ provider, fullPath, requestedModel, agent, localModel, matchedBy, routeTarget, forcedReason, ampModelMappings }) {
+  const timestamp = new Date().toISOString();
+  const mappingKeys = Object.keys(ampModelMappings || {});
+  const isLibrarian = agent === "librarian" || requestedModel === "claude-sonnet-4-6" || requestedModel === "claude-sonnet-4-5" || requestedModel === "claude-sonnet-4-5-20241022";
+
+  console.log("\n" + "█".repeat(72));
+  console.log(`[${timestamp}] [AMP ROUTING DECISION]`);
+  console.log(`Agent:        ${agent}`);
+  console.log(`Is Librarian: ${isLibrarian ? "YES" : "NO"}`);
+  console.log(`Provider:     ${provider}`);
+  console.log(`Path:         /api/provider/${provider}/${fullPath}`);
+  console.log(`Requested:    ${requestedModel || "(none)"}`);
+  console.log(`Mapped Model: ${localModel || "(miss)"}`);
+  console.log(`Mapping Hit:  ${localModel ? "YES" : "NO"}`);
+  console.log(`Matched By:   ${matchedBy || "none"}`);
+  console.log(`Route Target: ${routeTarget}`);
+  if (forcedReason) console.log(`Forced By:    ${forcedReason}`);
+  console.log(`Mapping Keys: ${mappingKeys.join(", ") || "(empty)"}`);
+  console.log("█".repeat(72) + "\n");
+
+  try {
+    addDebugLog("amp-routing", {
+      timestamp,
+      provider,
+      fullPath,
+      requestedModel,
+      agent,
+      isLibrarian,
+      localModel,
+      mappingHit: !!localModel,
+      matchedBy: matchedBy || null,
+      routeTarget,
+      forcedReason: forcedReason || null,
+      mappingKeys,
+    });
+  } catch {}
+}
+
 function resolveMappedModel(ampModelMappings, requestedModel) {
-  if (!requestedModel || !ampModelMappings) return null;
+  if (!requestedModel || !ampModelMappings) return { localModel: null, matchedBy: null };
 
   // Direct mapping (new style where key is exact Amp model id)
-  if (ampModelMappings[requestedModel]) return ampModelMappings[requestedModel];
+  if (ampModelMappings[requestedModel]) {
+    return { localModel: ampModelMappings[requestedModel], matchedBy: `exact:${requestedModel}` };
+  }
 
   // Backward compatibility: legacy slot keys (smart/rush/oracle/...)
   const legacySlotByModel = {
@@ -209,9 +318,11 @@ function resolveMappedModel(ampModelMappings, requestedModel) {
   };
 
   const legacySlot = legacySlotByModel[requestedModel];
-  if (legacySlot && ampModelMappings[legacySlot]) return ampModelMappings[legacySlot];
+  if (legacySlot && ampModelMappings[legacySlot]) {
+    return { localModel: ampModelMappings[legacySlot], matchedBy: `legacy-slot:${legacySlot}` };
+  }
 
-  return null;
+  return { localModel: null, matchedBy: legacySlot ? `legacy-slot-miss:${legacySlot}` : null };
 }
 
 export async function POST(request, { params }) {
@@ -255,42 +366,25 @@ export async function POST(request, { params }) {
     logRequest(provider, fullPath, body, requestHeaders);
 
     // Check if this model is mapped locally
-    const localModel = resolveMappedModel(ampModelMappings, requestedModel);
+    const { localModel, matchedBy } = resolveMappedModel(ampModelMappings, requestedModel);
     
-    // Check if request needs GitHub (Librarian tools)
-    const toolNames = (body?.tools || []).map(t => t?.function?.name || t?.name || "unknown");
-    const needsGitHub = toolNames.some(t => 
-      t.includes("github") || t.includes("commit_search") || t.includes("list_repositories") ||
-      t.includes("glob_github") || t.includes("read_github") || t.includes("search_github") ||
-      t.includes("diff") || t.includes("list_directory_github")
-    );
+    // NOTE: Do NOT force provider requests upstream based on tool names.
+    // GitHub auth is handled separately via /api/internal/github-auth-status.
+    const needsGitHub = false;
 
     const effectiveBody = applyAmpStreamDefault(body, fullPath);
 
-    // If needs GitHub, forward to ampcode.com (they have GitHub integration)
-    if (needsGitHub && ampUpstreamUrl && ampUpstreamApiKey) {
-      console.log(`[Amp Proxy] Forwarding ${requestedModel} to upstream (needs GitHub): ${ampUpstreamUrl}`);
-      
-      const upstreamUrl = `${ampUpstreamUrl}/api/provider/${provider}/${fullPath}`;
-
-      const response = await fetch(upstreamUrl, {
-        method: "POST",
-        headers: buildForwardHeaders(request, {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${ampUpstreamApiKey}`,
-        }),
-        body: JSON.stringify(effectiveBody),
-      });
-
-      console.log(`[Amp Proxy] Upstream Response: ${response.status} for ${requestedModel}`);
-
-      return new Response(response.body, {
-        status: response.status,
-        headers: buildProxyResponseHeaders(response),
-      });
-    }
-
     if (localModel) {
+      logRoutingDecision({
+        provider,
+        fullPath,
+        requestedModel,
+        agent: detectAgent(body),
+        localModel,
+        matchedBy,
+        routeTarget: "local-9router",
+        ampModelMappings,
+      });
       // Route to local 9router provider
       console.log(`[Amp Proxy] Routing ${requestedModel} to local model: ${localModel}`);
 
@@ -306,6 +400,12 @@ export async function POST(request, { params }) {
       };
 
       // Use special internal proxy header to bypass auth
+      logLocalDelivery({
+        requestedModel,
+        localModel,
+        internalUrl: internalUrl.toString(),
+        modifiedBody,
+      });
       const response = await fetch(internalUrl.toString(), {
         method: "POST",
         headers: buildForwardHeaders(request, {
@@ -318,11 +418,24 @@ export async function POST(request, { params }) {
       // Log response status for debugging
       console.log(`[Amp Proxy] Response: ${response.status} for ${requestedModel}`);
 
-      return new Response(response.body, {
-        status: response.status,
-        headers: buildProxyResponseHeaders(response),
+      return await buildLoggedProxyResponse(response, {
+        requestedModel,
+        localModel,
+        provider,
+        fullPath,
+        routeTarget: "local-9router",
       });
     } else {
+      logRoutingDecision({
+        provider,
+        fullPath,
+        requestedModel,
+        agent: detectAgent(body),
+        localModel,
+        matchedBy,
+        routeTarget: "ampcode-upstream",
+        ampModelMappings,
+      });
       // Forward to ampcode.com
       console.log(`[Amp Proxy] Forwarding ${requestedModel} to upstream: ${ampUpstreamUrl}`);
 
