@@ -1,6 +1,7 @@
 import { logInternalApi } from "@/lib/internalApiLogger";
 import { providerRegistry } from "@/lib/searchProviders/providerRegistry";
 import { proxyToUpstream } from "@/lib/internalApi/proxyToUpstream";
+import { getQuotaEligibleProviders, markProviderSuccess } from "@/lib/searchProviders/quotaState";
 
 function createAbortSignal(timeoutMs = 12000) {
   const controller = new AbortController();
@@ -27,24 +28,17 @@ function toAmpWebSearch2Result(normalizedResults, payload, providerType) {
   };
 }
 
-function isConfiguredProvider(item) {
-  return item?.enabled === true && typeof item?.apiKey === "string" && item.apiKey.trim().length > 0;
-}
-
-function getProviderCandidates(searchProviders) {
-  const providers = Array.isArray(searchProviders?.providers) ? searchProviders.providers : [];
-  return providers.filter((item) => isConfiguredProvider(item));
-}
 
 export async function handleWebSearch2(request, context) {
   const payload = context?.body?.params || {};
-  const searchProviders = context?.settings?.searchProviders || {};
+
+  const { settings, candidates } = await getQuotaEligibleProviders();
+  const searchProviders = settings?.searchProviders || {};
 
   if (searchProviders?.enabled !== true) {
     return proxyToUpstream(request, context.url, context.body, context.settings, context.params);
   }
 
-  const candidates = getProviderCandidates(searchProviders);
 
   for (const providerConfig of candidates) {
     const providerType = providerConfig.type;
@@ -68,6 +62,7 @@ export async function handleWebSearch2(request, context) {
       });
 
       const ampResponse = toAmpWebSearch2Result(normalized, payload, providerType);
+      await markProviderSuccess(providerType);
       return Response.json(ampResponse, {
         status: 200,
         headers: {
