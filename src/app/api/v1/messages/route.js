@@ -32,6 +32,50 @@ export async function OPTIONS() {
  */
 export async function POST(request) {
   await ensureInitialized();
+
+  // Debug: Log incoming request for Librarian
+  try {
+    const clonedRequest = request.clone();
+    const body = await clonedRequest.json();
+    const model = body?.model || "unknown";
+    
+    // Check if this is a Librarian-related request
+    const isLibrarian = 
+      model.includes("sonnet") || 
+      model.includes("librarian") ||
+      String(body?.system || "").toLowerCase().includes("librarian") ||
+      String(body?.metadata?.agent || "").includes("librarian");
+
+    if (isLibrarian) {
+      const headers = {};
+      for (const [key, value] of request.headers.entries()) {
+        if (key.toLowerCase().includes("auth") || key.toLowerCase().includes("api-key")) {
+          headers[key] = value ? String(value).slice(0, 20) + "..." : "(empty)";
+        } else {
+          headers[key] = value;
+        }
+      }
+
+      console.log("\n" + "=".repeat(80));
+      console.log("[LIBRARIAN DEBUG] /v1/messages");
+      console.log("=".repeat(80));
+      console.log("Model:", model);
+      console.log("Headers:", JSON.stringify(headers, null, 2));
+      
+      const bodyPreview = { ...body };
+      if (bodyPreview.messages?.length > 3) {
+        bodyPreview.messages = [...bodyPreview.messages.slice(0, 2), `... (${bodyPreview.messages.length - 2} more)`];
+      }
+      if (bodyPreview.tools?.length > 3) {
+        bodyPreview.tools = [...bodyPreview.tools.slice(0, 2), `... (${bodyPreview.tools.length - 2} more)`];
+      }
+      console.log("Body:", JSON.stringify(bodyPreview, null, 2).slice(0, 2000));
+      console.log("=".repeat(80) + "\n");
+    }
+  } catch (e) {
+    // Ignore errors in debug logging
+  }
+
   return await handleChat(request);
 }
 

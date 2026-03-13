@@ -1,15 +1,40 @@
 import { NextResponse } from "next/server";
 import { getSettings, getApiKeys } from "@/lib/localDb";
+import { addDebugLog } from "@/app/api/debug-logs/route";
 
 /**
  * Amp CLI User API Proxy
  * Route: /api/user/...
  */
 
+function logUserRequest(method, pathname, body = null) {
+  const logEntry = {
+    timestamp: new Date().toISOString(),
+    type: "user-proxy",
+    method,
+    path: pathname,
+    body: body ? JSON.stringify(body).slice(0, 500) : null,
+  };
+
+  console.log("\n" + "▓".repeat(70));
+  console.log(`[${logEntry.timestamp}] [USER PROXY] ${method} ${pathname}`);
+  if (body) {
+    console.log(`Body: ${logEntry.body}`);
+  }
+  console.log("▓".repeat(70) + "\n");
+
+  try {
+    addDebugLog("user-request", logEntry);
+  } catch (e) {}
+}
+
 export async function POST(request) {
   try {
     const url = new URL(request.url);
     const pathname = url.pathname;
+
+    const body = await request.json();
+    logUserRequest("POST", pathname, body);
 
     const settings = await getSettings();
     const { ampUpstreamUrl, ampUpstreamApiKey, ampRestrictManagementToLocalhost } = settings;
@@ -48,7 +73,6 @@ export async function POST(request) {
     }
 
     const upstreamUrl = `${ampUpstreamUrl}${pathname}${url.search}`;
-    const body = await request.json();
 
     const response = await fetch(upstreamUrl, {
       method: "POST",
@@ -82,6 +106,8 @@ export async function GET(request) {
   try {
     const url = new URL(request.url);
     const pathname = url.pathname;
+
+    logUserRequest("GET", pathname);
 
     const settings = await getSettings();
     const { ampUpstreamUrl, ampUpstreamApiKey, ampRestrictManagementToLocalhost } = settings;
