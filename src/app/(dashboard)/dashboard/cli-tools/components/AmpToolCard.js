@@ -32,6 +32,7 @@ export default function AmpToolCard({
   const [modalOpen, setModalOpen] = useState(false);
   const [currentEditingAlias, setCurrentEditingAlias] = useState(null);
   const [modelAliases, setModelAliases] = useState({});
+  const [ampUpstreamApiKey, setAmpUpstreamApiKey] = useState("");
 
   const getConfigStatus = () => {
     if (!ampStatus?.installed) return null;
@@ -61,10 +62,12 @@ export default function AmpToolCard({
       checkAmpStatus();
       fetchModelAliases();
       loadModelMappings();
+      fetchAmpUpstreamApiKey();
     }
     if (isExpanded) {
       fetchModelAliases();
       loadModelMappings();
+      fetchAmpUpstreamApiKey();
     }
   }, [isExpanded]);
 
@@ -75,6 +78,18 @@ export default function AmpToolCard({
       if (res.ok) setModelAliases(data.aliases || {});
     } catch (error) {
       console.log("Error fetching model aliases:", error);
+    }
+  };
+
+  const fetchAmpUpstreamApiKey = async () => {
+    try {
+      const res = await fetch("/api/settings");
+      const data = await res.json();
+      if (res.ok && data.ampUpstreamApiKey) {
+        setAmpUpstreamApiKey(data.ampUpstreamApiKey);
+      }
+    } catch (error) {
+      console.log("Error fetching Amp upstream API key:", error);
     }
   };
 
@@ -178,12 +193,11 @@ export default function AmpToolCard({
     setLoggingIn(true);
     setMessage(null);
     try {
-      // Get key from dropdown or use default
-      const keyToUse = selectedApiKey?.trim()
-        || (apiKeys?.length > 0 ? apiKeys[0].key : null);
+      // Use Amp Upstream API Key from Settings
+      const keyToUse = ampUpstreamApiKey?.trim();
 
       if (!keyToUse) {
-        setMessage({ type: "error", text: "Please select or create an API key first" });
+        setMessage({ type: "error", text: "Please configure Amp Upstream API Key in Settings first" });
         return;
       }
 
@@ -412,7 +426,7 @@ export default function AmpToolCard({
                 <Button variant="primary" size="sm" onClick={handleApplySettings} loading={applying}>
                   <span className="material-symbols-outlined text-[14px] mr-1">save</span>Apply
                 </Button>
-                <Button variant="outline" size="sm" onClick={handleAmpLogin} loading={loggingIn} disabled={!selectedApiKey && apiKeys?.length === 0}>
+                <Button variant="outline" size="sm" onClick={handleAmpLogin} loading={loggingIn} disabled={!ampUpstreamApiKey}>
                   <span className="material-symbols-outlined text-[14px] mr-1">login</span>Amp Login
                 </Button>
                 <Button variant="outline" size="sm" onClick={handleResetSettings} disabled={!ampStatus?.has9Router} loading={restoring}>
