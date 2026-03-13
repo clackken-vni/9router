@@ -3,6 +3,7 @@ import { validate, fail } from "@/lib/internalApi/auth";
 import { readJsonBody, buildRequestInfo } from "@/lib/internalApi/requestInfo";
 import { findOverrideConfig, buildOverrideResponse } from "@/lib/internalApi/overrides";
 import { proxyToUpstream } from "@/lib/internalApi/proxyToUpstream";
+import { handleWebSearch2 } from "@/lib/searchProviders/handleWebSearch2";
 import { logInternalApi } from "@/lib/internalApiLogger";
 
 function buildEmptyPostBodyResponse() {
@@ -19,10 +20,6 @@ function buildEmptyPostBodyResponse() {
       "cache-control": "no-store",
     },
   });
-}
-
-async function handleWebSearch2(request, context) {
-  return proxyToUpstream(request, context.url, context.body, context.settings, context.params);
 }
 
 export async function handleInternalApiRequest(request, params = {}) {
