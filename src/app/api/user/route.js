@@ -3,7 +3,7 @@ import { getSettings, getApiKeys } from "@/lib/localDb";
 
 /**
  * User info endpoint for Amp CLI authentication
- * Returns user information when valid API key is provided
+ * Proxies to ampcode.com to get real user info including githubLogin
  */
 export async function GET(request) {
   try {
@@ -18,7 +18,7 @@ export async function GET(request) {
 
     // Get settings
     const settings = await getSettings();
-    const { ampUpstreamApiKey } = settings;
+    const { ampUpstreamUrl, ampUpstreamApiKey } = settings;
 
     // Validate API key
     const apiKeys = await getApiKeys();
@@ -33,7 +33,27 @@ export async function GET(request) {
       );
     }
 
-    // Return user info
+    // If sgamp_ key, proxy to ampcode.com for real user info
+    if (apiKey.startsWith("sgamp_") && ampUpstreamUrl) {
+      console.log(`[User API] Proxying to ${ampUpstreamUrl}/api/user`);
+      
+      const response = await fetch(`${ampUpstreamUrl}/api/user`, {
+        method: "GET",
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "Accept": "application/json",
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        return NextResponse.json(data);
+      }
+      
+      console.log(`[User API] Upstream error: ${response.status}`);
+    }
+
+    // Fallback: Return local user info
     return NextResponse.json({
       id: "local-user",
       email: "user@localhost",

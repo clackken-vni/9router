@@ -141,20 +141,12 @@ export async function GET(request) {
 
     const upstreamUrl = `${ampUpstreamUrl}${pathname}${url.search}`;
 
-    // Amp CLI may request /user/me for auth checks; satisfy locally
-    if (pathname === "/user/me" || pathname === "/api/user/me") {
-      return NextResponse.json({
-        id: "local-user",
-        email: "user@localhost",
-        name: "Local User",
-        authenticated: true,
-      });
-    }
-
+    // Forward user's API key to ampcode.com for user endpoints
     const response = await fetch(upstreamUrl, {
       method: "GET",
       headers: {
-        "Authorization": `Bearer ${ampUpstreamApiKey}`,
+        "Authorization": `Bearer ${token}`,
+        "Accept": "application/json",
       },
     });
 
