@@ -8,19 +8,19 @@ import { NextResponse } from "next/server";
  */
 
 export async function GET(request, { params }) {
-  return proxyRequest(request, params);
+  return proxyRequest(request, await params);
 }
 
 export async function POST(request, { params }) {
-  return proxyRequest(request, params);
+  return proxyRequest(request, await params);
 }
 
 export async function PUT(request, { params }) {
-  return proxyRequest(request, params);
+  return proxyRequest(request, await params);
 }
 
 export async function DELETE(request, { params }) {
-  return proxyRequest(request, params);
+  return proxyRequest(request, await params);
 }
 
 async function proxyRequest(request, params) {
@@ -34,7 +34,7 @@ async function proxyRequest(request, params) {
     }
     
     const url = new URL(request.url);
-    const pathSegments = params.path ? (Array.isArray(params.path) ? params.path : [params.path]) : [];
+    const pathSegments = params?.path ? (Array.isArray(params.path) ? params.path : [params.path]) : [];
     const fullPath = pathSegments.join("/");
     const upstreamUrl = `${ampUpstreamUrl}/settings/${fullPath}${url.search}`;
     
@@ -50,6 +50,9 @@ async function proxyRequest(request, params) {
     
     const accept = request.headers.get("accept");
     if (accept) headers["Accept"] = accept;
+    
+    const cookie = request.headers.get("cookie");
+    if (cookie) headers["Cookie"] = cookie;
     
     // Get body for POST/PUT
     let body = undefined;
@@ -68,8 +71,23 @@ async function proxyRequest(request, params) {
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location");
       if (location) {
-        const rewrittenLocation = location.replace(ampUpstreamUrl, url.origin);
-        return NextResponse.redirect(rewrittenLocation, response.status);
+        let rewrittenLocation = location;
+        if (location.startsWith("/")) {
+          rewrittenLocation = `${url.origin}${location}`;
+        } else {
+          rewrittenLocation = location.replace(ampUpstreamUrl, url.origin);
+        }
+        console.log(`[Settings Proxy] Redirect: ${location} -> ${rewrittenLocation}`);
+        
+        const responseHeaders = new Headers();
+        responseHeaders.set("Location", rewrittenLocation);
+        const setCookies = response.headers.getSetCookie();
+        setCookies.forEach(cookie => responseHeaders.append("Set-Cookie", cookie));
+        
+        return new Response(null, {
+          status: response.status,
+          headers: responseHeaders,
+        });
       }
     }
     
@@ -85,12 +103,16 @@ async function proxyRequest(request, params) {
         .replace(/src="\/(?!api)/g, `src="${url.origin}/`);
     }
     
+    // Forward Set-Cookie headers
+    const responseHeaders = new Headers();
+    responseHeaders.set("Content-Type", responseContentType);
+    responseHeaders.set("Cache-Control", "no-cache");
+    const setCookies = response.headers.getSetCookie();
+    setCookies.forEach(cookie => responseHeaders.append("Set-Cookie", cookie));
+    
     return new Response(finalBody, {
       status: response.status,
-      headers: {
-        "Content-Type": responseContentType,
-        "Cache-Control": "no-cache",
-      },
+      headers: responseHeaders,
     });
     
   } catch (error) {

@@ -52,10 +52,24 @@ export async function GET(request) {
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location");
       if (location) {
-        // Rewrite redirect to go through our proxy
-        const rewrittenLocation = location.replace(ampUpstreamUrl, url.origin);
+        // Handle relative URLs - prepend origin
+        let rewrittenLocation = location;
+        if (location.startsWith("/")) {
+          rewrittenLocation = `${url.origin}${location}`;
+        } else {
+          rewrittenLocation = location.replace(ampUpstreamUrl, url.origin);
+        }
         console.log(`[Settings Proxy] Redirect: ${location} -> ${rewrittenLocation}`);
-        return NextResponse.redirect(rewrittenLocation, response.status);
+        
+        const responseHeaders = new Headers();
+        responseHeaders.set("Location", rewrittenLocation);
+        const setCookies = response.headers.getSetCookie();
+        setCookies.forEach(cookie => responseHeaders.append("Set-Cookie", cookie));
+        
+        return new Response(null, {
+          status: response.status,
+          headers: responseHeaders,
+        });
       }
     }
     
@@ -71,12 +85,16 @@ export async function GET(request) {
         .replace(/src="\/(?!api)/g, `src="${url.origin}/`);
     }
     
+    // Forward Set-Cookie headers
+    const responseHeaders = new Headers();
+    responseHeaders.set("Content-Type", contentType);
+    responseHeaders.set("Cache-Control", "no-cache");
+    const setCookies = response.headers.getSetCookie();
+    setCookies.forEach(cookie => responseHeaders.append("Set-Cookie", cookie));
+    
     return new Response(rewrittenBody, {
       status: response.status,
-      headers: {
-        "Content-Type": contentType,
-        "Cache-Control": "no-cache",
-      },
+      headers: responseHeaders,
     });
     
   } catch (error) {
