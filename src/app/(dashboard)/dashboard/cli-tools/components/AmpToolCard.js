@@ -23,7 +23,6 @@ export default function AmpToolCard({
   const [checkingAmp, setCheckingAmp] = useState(false);
   const [applying, setApplying] = useState(false);
   const [restoring, setRestoring] = useState(false);
-  const [loggingIn, setLoggingIn] = useState(false);
   const [message, setMessage] = useState(null);
   const [showInstallGuide, setShowInstallGuide] = useState(false);
   const [selectedApiKey, setSelectedApiKey] = useState("");
@@ -33,6 +32,7 @@ export default function AmpToolCard({
   const [currentEditingAlias, setCurrentEditingAlias] = useState(null);
   const [modelAliases, setModelAliases] = useState({});
   const [ampUpstreamApiKey, setAmpUpstreamApiKey] = useState("");
+  const [ampUpstreamUrl, setAmpUpstreamUrl] = useState("");
 
   const getConfigStatus = () => {
     if (!ampStatus?.installed) return null;
@@ -62,12 +62,12 @@ export default function AmpToolCard({
       checkAmpStatus();
       fetchModelAliases();
       loadModelMappings();
-      fetchAmpUpstreamApiKey();
+      fetchAmpUpstreamSettings();
     }
     if (isExpanded) {
       fetchModelAliases();
       loadModelMappings();
-      fetchAmpUpstreamApiKey();
+      fetchAmpUpstreamSettings();
     }
   }, [isExpanded]);
 
@@ -81,15 +81,16 @@ export default function AmpToolCard({
     }
   };
 
-  const fetchAmpUpstreamApiKey = async () => {
+  const fetchAmpUpstreamSettings = async () => {
     try {
       const res = await fetch("/api/settings");
       const data = await res.json();
-      if (res.ok && data.ampUpstreamApiKey) {
-        setAmpUpstreamApiKey(data.ampUpstreamApiKey);
+      if (res.ok) {
+        if (data.ampUpstreamApiKey) setAmpUpstreamApiKey(data.ampUpstreamApiKey);
+        if (data.ampUpstreamUrl) setAmpUpstreamUrl(data.ampUpstreamUrl);
       }
     } catch (error) {
-      console.log("Error fetching Amp upstream API key:", error);
+      console.log("Error fetching Amp upstream settings:", error);
     }
   };
 
@@ -189,44 +190,15 @@ export default function AmpToolCard({
     }
   };
 
-  const handleAmpLogin = async () => {
-    setLoggingIn(true);
-    setMessage(null);
-    try {
-      // Use Amp Upstream API Key from Settings
-      const keyToUse = ampUpstreamApiKey?.trim();
-
-      if (!keyToUse) {
-        setMessage({ type: "error", text: "Please configure Amp Upstream API Key in Settings first" });
-        return;
-      }
-
-      // Request login from Amp
-      const res = await fetch("/api/amp-cli-login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: keyToUse }),
-      });
-
-      const data = await res.json();
-
-      if (res.ok) {
-        // Open auth URL in new window
-        if (data.authUrl) {
-          window.open(data.authUrl, "_blank");
-          setMessage({
-            type: "success",
-            text: `Login initiated! Verification code: ${data.verificationCode}. Complete authentication in the opened window.`
-          });
-        }
-      } else {
-        setMessage({ type: "error", text: data.error || "Failed to initiate login" });
-      }
-    } catch (error) {
-      setMessage({ type: "error", text: error.message });
-    } finally {
-      setLoggingIn(false);
-    }
+  const handleAmpLogin = () => {
+    // Open Amp login page in new window
+    // User will authenticate and can get their API key from ampcode.com/settings
+    const loginUrl = ampUpstreamUrl || "https://ampcode.com";
+    window.open(`${loginUrl}/auth/cli-login`, "_blank");
+    setMessage({
+      type: "success",
+      text: "Opening Amp login page. After login, get your API key from Settings."
+    });
   };
 
   const openModelSelector = (alias) => {
@@ -426,7 +398,7 @@ export default function AmpToolCard({
                 <Button variant="primary" size="sm" onClick={handleApplySettings} loading={applying}>
                   <span className="material-symbols-outlined text-[14px] mr-1">save</span>Apply
                 </Button>
-                <Button variant="outline" size="sm" onClick={handleAmpLogin} loading={loggingIn} disabled={!ampUpstreamApiKey}>
+                <Button variant="outline" size="sm" onClick={handleAmpLogin}>
                   <span className="material-symbols-outlined text-[14px] mr-1">login</span>Amp Login
                 </Button>
                 <Button variant="outline" size="sm" onClick={handleResetSettings} disabled={!ampStatus?.has9Router} loading={restoring}>
