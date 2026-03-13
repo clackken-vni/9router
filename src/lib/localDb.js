@@ -50,6 +50,74 @@ function ensureDataDir() {
 // Default data structure
 import { buildDefaultAmpInternalOverrides } from "@/shared/constants/ampInternal";
 
+function getCurrentMonthKey() {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  return `${now.getFullYear()}-${month}`;
+}
+
+function buildDefaultSearchProviderUsage() {
+  return {
+    monthKey: getCurrentMonthKey(),
+    requestCount: 0,
+    lastSyncedAt: null,
+    providerReportedUsage: null,
+    providerReportedRemaining: null,
+  };
+}
+
+function buildDefaultSearchProviderSync() {
+  return {
+    mode: "local",
+    usageEndpointEnabled: false,
+  };
+}
+
+function buildDefaultSearchProviders() {
+  return {
+    enabled: true,
+    fallbackToAmpUpstream: true,
+    quotaMode: "local",
+    providers: [],
+  };
+}
+
+function normalizeSearchProviderItem(item = {}) {
+  const next = item && typeof item === "object" && !Array.isArray(item) ? { ...item } : {};
+  return {
+    id: typeof next.id === "string" ? next.id : "",
+    type: typeof next.type === "string" ? next.type : "",
+    enabled: next.enabled !== false,
+    apiKey: typeof next.apiKey === "string" ? next.apiKey : "",
+    monthlyQuota: Number.isInteger(next.monthlyQuota) && next.monthlyQuota >= 0 ? next.monthlyQuota : 0,
+    usage: {
+      ...buildDefaultSearchProviderUsage(),
+      ...(next.usage && typeof next.usage === "object" && !Array.isArray(next.usage) ? next.usage : {}),
+    },
+    sync: {
+      ...buildDefaultSearchProviderSync(),
+      ...(next.sync && typeof next.sync === "object" && !Array.isArray(next.sync) ? next.sync : {}),
+    },
+  };
+}
+
+function normalizeSearchProvidersConfig(config) {
+  const base = buildDefaultSearchProviders();
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return base;
+  }
+
+  const providers = Array.isArray(config.providers)
+    ? config.providers.map((item) => normalizeSearchProviderItem(item))
+    : [];
+
+  return {
+    ...base,
+    ...config,
+    providers,
+  };
+}
+
 const defaultData = {
   providerConnections: [],
   providerNodes: [],
@@ -75,7 +143,8 @@ const defaultData = {
     ampUpstreamApiKey: "",
     ampRestrictManagementToLocalhost: false,
     ampModelMappings: {},
-    ampInternalOverrides: buildDefaultAmpInternalOverrides()
+    ampInternalOverrides: buildDefaultAmpInternalOverrides(),
+    searchProviders: buildDefaultSearchProviders()
   },
   pricing: {} // NEW: pricing configuration
 };
@@ -106,7 +175,8 @@ function cloneDefaultData() {
       ampUpstreamApiKey: "",
       ampRestrictManagementToLocalhost: false,
       ampModelMappings: {},
-      ampInternalOverrides: buildDefaultAmpInternalOverrides()
+      ampInternalOverrides: buildDefaultAmpInternalOverrides(),
+      searchProviders: buildDefaultSearchProviders()
     },
     pricing: {},
   };
@@ -153,6 +223,12 @@ function ensureDbShape(data) {
           }
           changed = true;
         }
+      }
+
+      const normalizedSearchProviders = normalizeSearchProvidersConfig(next.settings.searchProviders);
+      if (JSON.stringify(normalizedSearchProviders) !== JSON.stringify(next.settings.searchProviders)) {
+        next.settings.searchProviders = normalizedSearchProviders;
+        changed = true;
       }
     }
 
