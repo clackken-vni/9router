@@ -2,6 +2,7 @@ import { logInternalApi } from "@/lib/internalApiLogger";
 import { providerRegistry } from "@/lib/searchProviders/providerRegistry";
 import { proxyToUpstream } from "@/lib/internalApi/proxyToUpstream";
 import { getQuotaEligibleProviders, markProviderSuccess } from "@/lib/searchProviders/quotaState";
+import { syncProviderUsageBestEffort } from "@/lib/searchProviders/syncUsage";
 
 function createAbortSignal(timeoutMs = 12000) {
   const controller = new AbortController();
@@ -63,6 +64,7 @@ export async function handleWebSearch2(request, context) {
 
       const ampResponse = toAmpWebSearch2Result(normalized, payload, providerType);
       await markProviderSuccess(providerType);
+      await syncProviderUsageBestEffort(providerType, adapter, raw);
       return Response.json(ampResponse, {
         status: 200,
         headers: {
