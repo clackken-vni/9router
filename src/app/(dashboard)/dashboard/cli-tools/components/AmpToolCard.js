@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { Card, Button, ManualConfigModal, ModelSelectModal } from "@/shared/components";
 import Image from "next/image";
+import { AMP_INTERNAL_OVERRIDE_DEFINITIONS } from "@/shared/constants/ampInternal";
 
 const CLOUD_URL = process.env.NEXT_PUBLIC_CLOUD_URL;
 
@@ -33,6 +34,7 @@ export default function AmpToolCard({
   const [currentEditingAlias, setCurrentEditingAlias] = useState(null);
   const [modelAliases, setModelAliases] = useState({});
   const [ampUpstreamApiKey, setAmpUpstreamApiKey] = useState("");
+  const [internalOverrides, setInternalOverrides] = useState({});
 
   const getConfigStatus = () => {
     if (!ampStatus?.installed) return null;
@@ -88,6 +90,9 @@ export default function AmpToolCard({
       if (res.ok && data.ampUpstreamApiKey) {
         setAmpUpstreamApiKey(data.ampUpstreamApiKey);
       }
+      if (res.ok) {
+        setInternalOverrides(data.ampInternalOverrides || {});
+      }
     } catch (error) {
       console.log("Error fetching Amp upstream API key:", error);
     }
@@ -131,6 +136,36 @@ export default function AmpToolCard({
     return customBaseUrl || baseUrl;
   };
 
+  const handleInternalOverrideToggle = (key, enabled) => {
+    setInternalOverrides((prev) => ({
+      ...prev,
+      [key]: {
+        ...(prev[key] || {}),
+        enabled,
+      },
+    }));
+  };
+
+  const handleInternalOverrideBodyChange = (key, body) => {
+    setInternalOverrides((prev) => ({
+      ...prev,
+      [key]: {
+        ...(prev[key] || {}),
+        body,
+      },
+    }));
+  };
+
+  const handleInternalOverrideStatusChange = (key, status) => {
+    setInternalOverrides((prev) => ({
+      ...prev,
+      [key]: {
+        ...(prev[key] || {}),
+        status,
+      },
+    }));
+  };
+
   const handleApplySettings = async () => {
     setApplying(true);
     setMessage(null);
@@ -148,7 +183,8 @@ export default function AmpToolCard({
         body: JSON.stringify({
           url,
           apiKey: keyToUse,
-          modelMappings: modelMappings || {}
+          modelMappings: modelMappings || {},
+          ampInternalOverrides: internalOverrides || {}
         }),
       });
       const data = await res.json();
@@ -413,6 +449,61 @@ export default function AmpToolCard({
                     )}
                   </div>
                 ))}
+
+                {/* Internal API Overrides */}
+                <div className="mt-4 pt-4 border-t border-border/60">
+                  <div className="mb-3">
+                    <h4 className="text-sm font-semibold text-text-main">Internal API Overrides</h4>
+                    <p className="text-xs text-text-muted">Bật custom để trả dữ liệu local thay vì gọi ampcode.com</p>
+                  </div>
+                  <div className="flex flex-col gap-3">
+                    {AMP_INTERNAL_OVERRIDE_DEFINITIONS.map((item) => {
+                      const override = internalOverrides?.[item.key] || {};
+                      return (
+                        <div key={item.key} className="rounded-lg border border-border p-3 bg-surface/40">
+                          <label className="flex items-start gap-3 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={!!override.enabled}
+                              onChange={(e) => handleInternalOverrideToggle(item.key, e.target.checked)}
+                              className="mt-1"
+                            />
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-sm font-medium text-text-main">{item.label}</span>
+                                <span className="px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/5 text-[10px]">{item.httpMethod}</span>
+                                <span className="px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/5 text-[10px]">{item.path}</span>
+                              </div>
+                              <p className="text-xs text-text-muted mt-1">{item.description}</p>
+                            </div>
+                          </label>
+                          {override.enabled && (
+                            <div className="mt-3 ml-6 flex flex-col gap-2">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-text-muted w-14">Status</span>
+                                <input
+                                  type="number"
+                                  min="100"
+                                  max="599"
+                                  value={override.status || 200}
+                                  onChange={(e) => handleInternalOverrideStatusChange(item.key, e.target.value)}
+                                  className="w-24 px-2 py-1 bg-surface rounded border border-border text-xs focus:outline-none"
+                                />
+                              </div>
+                              <textarea
+                                value={override.body || ""}
+                                onChange={(e) => handleInternalOverrideBodyChange(item.key, e.target.value)}
+                                rows={8}
+                                className="w-full px-3 py-2 bg-surface rounded border border-border text-xs font-mono focus:outline-none focus:ring-1 focus:ring-primary/50"
+                                placeholder="JSON response..."
+                              />
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
 
               {message && (

@@ -48,6 +48,8 @@ function ensureDataDir() {
 }
 
 // Default data structure
+import { buildDefaultAmpInternalOverrides } from "@/shared/constants/ampInternal";
+
 const defaultData = {
   providerConnections: [],
   providerNodes: [],
@@ -72,7 +74,8 @@ const defaultData = {
     ampUpstreamUrl: "https://ampcode.com",
     ampUpstreamApiKey: "",
     ampRestrictManagementToLocalhost: false,
-    ampModelMappings: {}
+    ampModelMappings: {},
+    ampInternalOverrides: buildDefaultAmpInternalOverrides()
   },
   pricing: {} // NEW: pricing configuration
 };
@@ -102,7 +105,8 @@ function cloneDefaultData() {
       ampUpstreamUrl: "https://ampcode.com",
       ampUpstreamApiKey: "",
       ampRestrictManagementToLocalhost: false,
-      ampModelMappings: {}
+      ampModelMappings: {},
+      ampInternalOverrides: buildDefaultAmpInternalOverrides()
     },
     pricing: {},
   };
