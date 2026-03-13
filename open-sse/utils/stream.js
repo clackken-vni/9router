@@ -56,6 +56,41 @@ export function createSSEStream(options = {}) {
   let accumulatedThinking = "";
   let ttftAt = null;
   let hasSeenSSEData = false; // Track if we've seen valid SSE data events
+  const accumulatedToolCalls = new Map();
+
+  const mergeToolCalls = (toolCalls) => {
+    if (!Array.isArray(toolCalls)) return;
+
+    for (const tc of toolCalls) {
+      if (!tc || typeof tc !== "object") continue;
+      const index = Number.isInteger(tc.index) ? tc.index : 0;
+      const current = accumulatedToolCalls.get(index) || {
+        id: tc.id || `call_${Date.now()}_${index}`,
+        type: tc.type || "function",
+        function: {
+          name: "",
+          arguments: ""
+        }
+      };
+
+      if (tc.id) current.id = tc.id;
+      if (tc.type) current.type = tc.type;
+
+      if (tc.function?.name) {
+        current.function.name = tc.function.name;
+      }
+
+      if (typeof tc.function?.arguments === "string") {
+        current.function.arguments += tc.function.arguments;
+      }
+
+      accumulatedToolCalls.set(index, current);
+    }
+  };
+
+  const getToolCalls = () => Array.from(accumulatedToolCalls.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([, tc]) => tc);
 
   return new TransformStream({
     transform(chunk, controller) {
@@ -112,6 +147,9 @@ export function createSSEStream(options = {}) {
               const delta = parsed.choices?.[0]?.delta;
               const content = delta?.content;
               const reasoning = delta?.reasoning_content;
+              if (Array.isArray(delta?.tool_calls)) {
+                mergeToolCalls(delta.tool_calls);
+              }
               if (content && typeof content === "string") {
                 totalContentLength += content.length;
                 accumulatedContent += content;
@@ -194,6 +232,9 @@ export function createSSEStream(options = {}) {
         if (parsed.choices?.[0]?.delta?.reasoning_content) {
           totalContentLength += parsed.choices[0].delta.reasoning_content.length;
           accumulatedThinking += parsed.choices[0].delta.reasoning_content;
+        }
+        if (Array.isArray(parsed.choices?.[0]?.delta?.tool_calls)) {
+          mergeToolCalls(parsed.choices[0].delta.tool_calls);
         }
         
         // Gemini format
@@ -291,7 +332,8 @@ export function createSSEStream(options = {}) {
           if (onStreamComplete) {
             onStreamComplete({
               content: accumulatedContent,
-              thinking: accumulatedThinking
+              thinking: accumulatedThinking,
+              toolCalls: getToolCalls()
             }, usage, ttftAt);
           }
           return;

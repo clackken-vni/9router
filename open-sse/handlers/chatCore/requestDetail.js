@@ -12,11 +12,69 @@ const OPTIONAL_PARAMS = [
   "user", "parallel_tool_calls"
 ];
 
+function extractToolPostPayloads(body = {}) {
+  const payloads = [];
+
+  if (Array.isArray(body.messages)) {
+    for (const msg of body.messages) {
+      if (!msg || typeof msg !== "object") continue;
+
+      if (msg.role === "tool") {
+        payloads.push({
+          source: "chat.messages.tool",
+          tool_call_id: msg.tool_call_id || null,
+          name: msg.name || null,
+          content: msg.content ?? null,
+        });
+      }
+
+      if (Array.isArray(msg.content)) {
+        for (const block of msg.content) {
+          if (block?.type === "tool_result") {
+            payloads.push({
+              source: "claude.tool_result",
+              tool_use_id: block.tool_use_id || null,
+              content: block.content ?? null,
+              is_error: block.is_error === true,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  if (Array.isArray(body.input)) {
+    for (const item of body.input) {
+      if (!item || typeof item !== "object") continue;
+      if (item.type === "function_call_output") {
+        payloads.push({
+          source: "responses.function_call_output",
+          call_id: item.call_id || null,
+          output: item.output ?? null,
+        });
+      }
+    }
+  }
+
+  return payloads;
+}
+
 export function extractRequestConfig(body, stream) {
-  const config = { messages: body.messages || [], model: body.model, stream };
+  const config = {
+    messages: body.messages || [],
+    input: body.input || [],
+    model: body.model,
+    stream
+  };
   for (const param of OPTIONAL_PARAMS) {
     if (body[param] !== undefined) config[param] = body[param];
   }
+
+  const toolPostPayloads = extractToolPostPayloads(body);
+  if (toolPostPayloads.length > 0) {
+    config.toolPostPayloads = toolPostPayloads;
+  }
+
   return config;
 }
 

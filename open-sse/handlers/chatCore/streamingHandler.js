@@ -77,14 +77,27 @@ export function buildOnStreamComplete({ provider, model, connectionId, apiKey, r
       total: Date.now() - requestStartTime
     };
 
+    const outputToolCalls = Array.isArray(contentObj?.toolCalls) && contentObj.toolCalls.length > 0
+      ? contentObj.toolCalls
+      : null;
+    const hasTextContent = Boolean(contentObj?.content && contentObj.content.length > 0);
+    const isToolOnlyResponse = outputToolCalls && !hasTextContent;
+
     saveRequestDetail(buildRequestDetail({
       provider, model, connectionId,
       latency,
       tokens: usage || { prompt_tokens: 0, completion_tokens: 0 },
       request: extractRequestConfig(body, stream),
       providerRequest: finalBody || translatedBody || null,
-      providerResponse: contentObj.content || "[Empty streaming response]",
-      response: { content: contentObj.content || "[Empty streaming response]", thinking: contentObj.thinking || null, type: "streaming" },
+      providerResponse: isToolOnlyResponse
+        ? { tool_calls: outputToolCalls }
+        : (contentObj.content || "[Empty streaming response]"),
+      response: {
+        content: contentObj.content || (outputToolCalls ? null : "[Empty streaming response]"),
+        thinking: contentObj.thinking || null,
+        tool_calls: outputToolCalls,
+        type: "streaming"
+      },
       status: "success"
     }, { id: streamDetailId })).catch(err => {
       console.error("[RequestDetail] Failed to update streaming content:", err.message);
