@@ -18,6 +18,8 @@ export async function searchTavily({ providerConfig, payload, signal }) {
       query,
       max_results: Math.min(maxResults, 20),
       search_depth: "basic",
+      include_answer: false,
+      include_images: false,
     }),
     signal,
   });
@@ -28,4 +30,19 @@ export async function searchTavily({ providerConfig, payload, signal }) {
   }
 
   return res.json();
+}
+
+export function extractTavilyUsage(payload) {
+  const credits = payload?.usage?.credits;
+  if (!Number.isFinite(credits)) {
+    return {
+      providerReportedUsage: null,
+      providerReportedRemaining: null,
+    };
+  }
+
+  return {
+    providerReportedUsage: Math.max(0, Math.floor(credits)),
+    providerReportedRemaining: null,
+  };
 }
