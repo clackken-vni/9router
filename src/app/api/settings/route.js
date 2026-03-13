@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSettings, updateSettings, getApiKeys } from "@/lib/localDb";
 import { applyOutboundProxyEnv } from "@/lib/network/outboundProxy";
+import { redactSearchProviders, sanitizeSearchProviders } from "@/lib/searchProvidersSettings";
 import bcrypt from "bcryptjs";
 
 /**
@@ -76,12 +77,16 @@ export async function GET(request) {
     
     // Return local settings
     const { password, ...safeSettings } = settings;
+    const redactedSettings = {
+      ...safeSettings,
+      searchProviders: redactSearchProviders(safeSettings.searchProviders),
+    };
     
     const enableRequestLogs = process.env.ENABLE_REQUEST_LOGS === "true";
     const enableTranslator = process.env.ENABLE_TRANSLATOR === "true";
     
     return NextResponse.json({ 
-      ...safeSettings, 
+      ...redactedSettings, 
       enableRequestLogs,
       enableTranslator,
       hasPassword: !!password
@@ -122,6 +127,14 @@ export async function PATCH(request) {
       body.password = await bcrypt.hash(body.newPassword, salt);
       delete body.newPassword;
       delete body.currentPassword;
+    }
+
+    if (body.searchProviders !== undefined) {
+      try {
+        body.searchProviders = sanitizeSearchProviders(body.searchProviders);
+      } catch (validationError) {
+        return NextResponse.json({ error: validationError.message }, { status: 400 });
+      }
     }
 
     const settings = await updateSettings(body);
