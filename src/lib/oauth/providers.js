@@ -15,6 +15,7 @@ import {
   IFLOW_CONFIG,
   ANTIGRAVITY_CONFIG,
   GITHUB_CONFIG,
+  GITHUB_CODE_HOST_CONFIG,
   KIRO_CONFIG,
   CURSOR_CONFIG,
   KIMI_CODING_CONFIG,
@@ -563,6 +564,85 @@ const PROVIDERS = {
         githubLogin: extra?.userInfo?.login,
         githubName: extra?.userInfo?.name,
         githubEmail: extra?.userInfo?.email,
+      },
+    }),
+  },
+
+  // GitHub Code Host - for AMP CLI/Librarian code host connection
+  "github-code-host": {
+    config: GITHUB_CODE_HOST_CONFIG,
+    flowType: "device_code",
+    requestDeviceCode: async (config) => {
+      const response = await fetch(config.deviceCodeUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Accept: "application/json",
+        },
+        body: new URLSearchParams({
+          client_id: config.clientId,
+          scope: config.scopes,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`Device code request failed: ${error}`);
+      }
+
+      return await response.json();
+    },
+    pollToken: async (config, deviceCode) => {
+      const response = await fetch(config.tokenUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Accept: "application/json",
+        },
+        body: new URLSearchParams({
+          client_id: config.clientId,
+          device_code: deviceCode,
+          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+        }),
+      });
+
+      let data;
+      try {
+        data = await response.json();
+      } catch (e) {
+        const text = await response.text();
+        data = { error: "invalid_response", error_description: text };
+      }
+
+      return {
+        ok: response.ok,
+        data: data,
+      };
+    },
+    postExchange: async (tokens) => {
+      // Get user info from GitHub
+      const userRes = await fetch(GITHUB_CODE_HOST_CONFIG.userInfoUrl, {
+        headers: {
+          Authorization: `Bearer ${tokens.access_token}`,
+          Accept: "application/json",
+          "X-GitHub-Api-Version": GITHUB_CODE_HOST_CONFIG.apiVersion,
+          "User-Agent": "9Router",
+        },
+      });
+      const userInfo = userRes.ok ? await userRes.json() : {};
+
+      return { userInfo };
+    },
+    mapTokens: (tokens, extra) => ({
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token,
+      expiresIn: tokens.expires_in,
+      providerSpecificData: {
+        githubUserId: extra?.userInfo?.id,
+        githubLogin: extra?.userInfo?.login,
+        githubName: extra?.userInfo?.name,
+        githubEmail: extra?.userInfo?.email,
+        githubAvatarUrl: extra?.userInfo?.avatar_url,
       },
     }),
   },

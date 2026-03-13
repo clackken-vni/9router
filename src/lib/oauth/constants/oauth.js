@@ -136,6 +136,17 @@ export const GITHUB_CONFIG = {
   editorPluginVersion: "copilot-chat/0.26.7",
 };
 
+// GitHub Code Host OAuth Configuration (Device Code Flow for Librarian/AMP CLI)
+// Used for code host connection - needs repo access for Librarian
+export const GITHUB_CODE_HOST_CONFIG = {
+  clientId: process.env.GITHUB_CODE_HOST_CLIENT_ID || "Iv1.b507a08c87ecfe98", // Can use same or different OAuth app
+  deviceCodeUrl: "https://github.com/login/device/code",
+  tokenUrl: "https://github.com/login/oauth/access_token",
+  userInfoUrl: "https://api.github.com/user",
+  scopes: process.env.GITHUB_CODE_HOST_SCOPES || "read:user user:email repo", // repo scope for Librarian
+  apiVersion: "2022-11-28",
+};
+
 // Kiro OAuth Configuration
 // Supports multiple auth methods:
 // 1. AWS Builder ID (Device Code Flow)

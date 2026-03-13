@@ -1,17 +1,16 @@
 import { NextResponse } from "next/server";
-import { getSettings, getApiKeys } from "@/lib/localDb";
+import { getSettings, getApiKeys, getProviderConnections } from "@/lib/localDb";
 
 /**
  * Code Host Connections API
  * 
- * Returns GitHub/GitLab connection status by checking /api/user
+ * Returns GitHub/GitLab connection status from local DB
  * AMP CLI polls this endpoint to check if GitHub is connected
+ * 
+ * Connection is established via /api/oauth/github-code-host/device-code flow
  */
 export async function GET(request) {
   try {
-    const settings = await getSettings();
-    const { ampUpstreamUrl } = settings;
-    
     // Get user's API key from request
     const authHeader = request.headers.get("authorization");
     const userApiKey = authHeader ? authHeader.replace(/^Bearer\s+/i, "") : "";
@@ -24,61 +23,43 @@ export async function GET(request) {
     const apiKeys = await getApiKeys();
     const validKey = apiKeys.find(k => k.key === userApiKey && k.isActive !== false)
       || userApiKey === "sk_9router"
+      || userApiKey === "sk-9router-local"  // For local settings page
       || userApiKey.startsWith("sgamp_");
     
     if (!validKey) {
       return NextResponse.json({ error: "Invalid API key" }, { status: 401 });
     }
     
-    // For sgamp_ keys, check githubLogin from ampcode.com
-    if (userApiKey.startsWith("sgamp_") && ampUpstreamUrl) {
-      try {
-        const response = await fetch(`${ampUpstreamUrl}/api/user`, {
-          method: "GET",
-          headers: {
-            "Authorization": `Bearer ${userApiKey}`,
-            "Accept": "application/json",
-          },
-        });
-        
-        if (response.ok) {
-          const userData = await response.json();
-          const githubLogin = userData.githubLogin;
-          const gitlabLogin = userData.gitlabLogin || null;
-          
-          return NextResponse.json({
-            codeHostConnections: {
-              github: githubLogin ? {
-                connected: true,
-                login: githubLogin,
-              } : { connected: false },
-              gitlab: gitlabLogin ? {
-                connected: true,
-                login: gitlabLogin,
-              } : { connected: false },
-            },
-            github: { 
-              connected: !!githubLogin,
-              login: githubLogin || null,
-            },
-            gitlab: { 
-              connected: !!gitlabLogin,
-              login: gitlabLogin || null,
-            },
-          });
-        }
-      } catch (err) {
-        console.error(`[Code Host] Failed to fetch from upstream:`, err.message);
-      }
-    }
+    // Get GitHub code host connection from local DB
+    const githubConnections = await getProviderConnections({ 
+      provider: "github-code-host", 
+      isActive: true 
+    });
     
-    // Fallback: return not connected
+    const githubConnection = githubConnections[0];
+    
+    // Get GitHub login from connection
+    const githubLogin = githubConnection?.providerSpecificData?.githubLogin 
+      || githubConnection?.name 
+      || null;
+    
+    const githubConnected = !!githubConnection && !!githubLogin;
+    
     return NextResponse.json({
       codeHostConnections: {
-        github: { connected: false },
+        github: githubConnected ? {
+          connected: true,
+          login: githubLogin,
+          name: githubConnection?.providerSpecificData?.githubName || githubLogin,
+          email: githubConnection?.providerSpecificData?.githubEmail || null,
+          avatarUrl: githubConnection?.providerSpecificData?.githubAvatarUrl || null,
+        } : { connected: false },
         gitlab: { connected: false },
       },
-      github: { connected: false },
+      github: { 
+        connected: githubConnected,
+        login: githubLogin,
+      },
       gitlab: { connected: false },
     });
   } catch (error) {
