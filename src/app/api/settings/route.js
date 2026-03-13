@@ -1,17 +1,13 @@
 import { NextResponse } from "next/server";
-import { getSettings, updateSettings } from "@/lib/localDb";
+import { getSettings, updateSettings, getApiKeys } from "@/lib/localDb";
 import { applyOutboundProxyEnv } from "@/lib/network/outboundProxy";
 import bcrypt from "bcryptjs";
 
 /**
  * Amp CLI Settings API
  * 
- * Proxies code host connections to ampcode.com when:
- * - User clicks "Connect GitHub" from Amp CLI
- * - Amp CLI requests code host connection status
- * 
- * Query params:
- * - ?keys=codeHostConnections - Fetch from ampcode.com
+ * For codeHostConnections: proxy to ampcode.com using user's API key
+ * AMP CLI polls this endpoint to check GitHub connection status
  */
 export async function GET(request) {
   try {
@@ -19,43 +15,63 @@ export async function GET(request) {
     const keys = url.searchParams.get("keys");
     
     const settings = await getSettings();
-    const { ampUpstreamUrl, ampUpstreamApiKey } = settings;
+    const { ampUpstreamUrl } = settings;
     
-    // If requesting code host connections, proxy to ampcode.com
+    // If requesting code host connections, proxy to ampcode.com using user's token
     if (keys && (keys.includes("codeHost") || keys.includes("github") || keys.includes("gitlab"))) {
       console.log(`[Settings] Proxying code host connections request to upstream`);
       
-      if (ampUpstreamUrl && ampUpstreamApiKey) {
-        try {
-          const upstreamUrl = `${ampUpstreamUrl}/api/settings?keys=${encodeURIComponent(keys)}`;
-          
-          const response = await fetch(upstreamUrl, {
-            method: "GET",
-            headers: {
-              "Authorization": `Bearer ${ampUpstreamApiKey}`,
-              "Accept": "application/json",
-              "User-Agent": "9Router/1.0",
-            },
-          });
-          
-          if (response.ok) {
-            const data = await response.json();
-            console.log(`[Settings] Got code host connections from upstream`);
-            return NextResponse.json(data);
-          } else {
-            console.log(`[Settings] Upstream error: ${response.status}`);
-          }
-        } catch (err) {
-          console.error(`[Settings] Failed to proxy to upstream:`, err.message);
-        }
+      // Get user's API key from request
+      const authHeader = request.headers.get("authorization");
+      const userApiKey = authHeader ? authHeader.replace(/^Bearer\s+/i, "") : "";
+      
+      if (!userApiKey) {
+        return NextResponse.json({ error: "Authorization required" }, { status: 401 });
       }
       
-      // Fallback: return empty code host connections
-      return NextResponse.json({
-        codeHostConnections: {},
-        github: { connected: false },
-        gitlab: { connected: false },
-      });
+      // Validate API key locally
+      const apiKeys = await getApiKeys();
+      const validKey = apiKeys.find(k => k.key === userApiKey && k.isActive !== false)
+        || userApiKey === "sk_9router"
+        || userApiKey.startsWith("sgamp_");
+      
+      if (!validKey) {
+        return NextResponse.json({ error: "Invalid API key" }, { status: 401 });
+      }
+      
+      if (!ampUpstreamUrl) {
+        return NextResponse.json({ error: "Amp upstream not configured" }, { status: 500 });
+      }
+      
+      try {
+        const upstreamUrl = `${ampUpstreamUrl}/api/settings?keys=${encodeURIComponent(keys)}`;
+        
+        const response = await fetch(upstreamUrl, {
+          method: "GET",
+          headers: {
+            "Authorization": `Bearer ${userApiKey}`,
+            "Accept": "application/json",
+          },
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          console.log(`[Settings] Got code host connections from upstream`);
+          return NextResponse.json(data);
+        } else {
+          console.log(`[Settings] Upstream error: ${response.status}`);
+          return NextResponse.json(
+            { error: `Upstream error: ${response.status}` },
+            { status: response.status }
+          );
+        }
+      } catch (err) {
+        console.error(`[Settings] Failed to proxy to upstream:`, err.message);
+        return NextResponse.json(
+          { error: `Failed to connect to upstream: ${err.message}` },
+          { status: 502 }
+        );
+      }
     }
     
     // Return local settings
