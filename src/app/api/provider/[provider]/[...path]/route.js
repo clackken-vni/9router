@@ -256,8 +256,39 @@ export async function POST(request, { params }) {
 
     // Check if this model is mapped locally
     const localModel = resolveMappedModel(ampModelMappings, requestedModel);
+    
+    // Check if request needs GitHub (Librarian tools)
+    const toolNames = (body?.tools || []).map(t => t?.function?.name || t?.name || "unknown");
+    const needsGitHub = toolNames.some(t => 
+      t.includes("github") || t.includes("commit_search") || t.includes("list_repositories") ||
+      t.includes("glob_github") || t.includes("read_github") || t.includes("search_github") ||
+      t.includes("diff") || t.includes("list_directory_github")
+    );
 
     const effectiveBody = applyAmpStreamDefault(body, fullPath);
+
+    // If needs GitHub, forward to ampcode.com (they have GitHub integration)
+    if (needsGitHub && ampUpstreamUrl && ampUpstreamApiKey) {
+      console.log(`[Amp Proxy] Forwarding ${requestedModel} to upstream (needs GitHub): ${ampUpstreamUrl}`);
+      
+      const upstreamUrl = `${ampUpstreamUrl}/api/provider/${provider}/${fullPath}`;
+
+      const response = await fetch(upstreamUrl, {
+        method: "POST",
+        headers: buildForwardHeaders(request, {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${ampUpstreamApiKey}`,
+        }),
+        body: JSON.stringify(effectiveBody),
+      });
+
+      console.log(`[Amp Proxy] Upstream Response: ${response.status} for ${requestedModel}`);
+
+      return new Response(response.body, {
+        status: response.status,
+        headers: buildProxyResponseHeaders(response),
+      });
+    }
 
     if (localModel) {
       // Route to local 9router provider
