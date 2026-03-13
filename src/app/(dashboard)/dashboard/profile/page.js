@@ -1,10 +1,48 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Card, Button, Toggle, Input } from "@/shared/components";
+import { Card, Button, Toggle, Input, Select } from "@/shared/components";
 import { useTheme } from "@/shared/hooks/useTheme";
 import { cn } from "@/shared/utils/cn";
 import { APP_CONFIG } from "@/shared/constants/config";
+
+const SEARCH_PROVIDER_PRESETS = [
+  { id: "brave", type: "brave", name: "Brave" },
+  { id: "tavily", type: "tavily", name: "Tavily" },
+  { id: "exa", type: "exa", name: "Exa" },
+  { id: "serper", type: "serper", name: "Serper" },
+];
+
+function normalizeSearchProvidersForm(searchProviders) {
+  const baseProviders = Array.isArray(searchProviders?.providers) ? searchProviders.providers : [];
+  const providerMap = new Map(baseProviders.map((item) => [item.type, item]));
+
+  const orderedProviders = [
+    ...baseProviders.filter((item) => item?.type && !SEARCH_PROVIDER_PRESETS.some((preset) => preset.type === item.type)),
+    ...SEARCH_PROVIDER_PRESETS.map((preset) => {
+      const existing = providerMap.get(preset.type) || {};
+      return {
+        id: existing.id || preset.id,
+        type: preset.type,
+        name: preset.name,
+        enabled: existing.enabled === true,
+        apiKey: "",
+        hasApiKey: existing.hasApiKey === true,
+        maskedApiKey: existing.maskedApiKey || null,
+        monthlyQuota: Number.isInteger(existing.monthlyQuota) ? existing.monthlyQuota : 5000,
+        usage: existing.usage || {},
+        sync: existing.sync || {},
+      };
+    }),
+  ];
+
+  return {
+    enabled: searchProviders?.enabled !== false,
+    fallbackToAmpUpstream: searchProviders?.fallbackToAmpUpstream !== false,
+    quotaMode: searchProviders?.quotaMode || "local",
+    providers: orderedProviders,
+  };
+}
 
 export default function ProfilePage() {
   const { theme, setTheme, isDark } = useTheme();
@@ -31,6 +69,9 @@ export default function ProfilePage() {
   });
   const [ampStatus, setAmpStatus] = useState({ type: "", message: "" });
   const [ampLoading, setAmpLoading] = useState(false);
+  const [searchProvidersForm, setSearchProvidersForm] = useState(normalizeSearchProvidersForm(null));
+  const [searchProvidersStatus, setSearchProvidersStatus] = useState({ type: "", message: "" });
+  const [searchProvidersSaving, setSearchProvidersSaving] = useState(false);
 
   useEffect(() => {
     fetch("/api/settings")
@@ -47,6 +88,7 @@ export default function ProfilePage() {
           ampUpstreamApiKey: data?.ampUpstreamApiKey || "",
           ampRestrictManagementToLocalhost: data?.ampRestrictManagementToLocalhost === true,
         });
+        setSearchProvidersForm(normalizeSearchProvidersForm(data?.searchProviders));
         setLoading(false);
       })
       .catch((err) => {
@@ -268,6 +310,67 @@ export default function ProfilePage() {
     }
   };
 
+  const moveSearchProvider = (index, direction) => {
+    setSearchProvidersForm((prev) => {
+      const next = [...prev.providers];
+      const target = index + direction;
+      if (target < 0 || target >= next.length) return prev;
+      [next[index], next[target]] = [next[target], next[index]];
+      return { ...prev, providers: next };
+    });
+  };
+
+  const updateSearchProviderField = (index, key, value) => {
+    setSearchProvidersForm((prev) => {
+      const next = [...prev.providers];
+      next[index] = { ...next[index], [key]: value };
+      return { ...prev, providers: next };
+    });
+  };
+
+  const saveSearchProvidersSettings = async (e) => {
+    e.preventDefault();
+    setSearchProvidersSaving(true);
+    setSearchProvidersStatus({ type: "", message: "" });
+
+    try {
+      const payload = {
+        searchProviders: {
+          enabled: searchProvidersForm.enabled,
+          fallbackToAmpUpstream: searchProvidersForm.fallbackToAmpUpstream,
+          quotaMode: searchProvidersForm.quotaMode,
+          providers: searchProvidersForm.providers.map((item) => ({
+            id: item.id,
+            type: item.type,
+            enabled: item.enabled === true,
+            apiKey: item.apiKey,
+            monthlyQuota: Number(item.monthlyQuota) || 0,
+            usage: item.usage || {},
+            sync: item.sync || {},
+          })),
+        },
+      };
+
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to save search providers settings");
+      }
+
+      setSettings((prev) => ({ ...prev, ...data }));
+      setSearchProvidersForm(normalizeSearchProvidersForm(data.searchProviders));
+      setSearchProvidersStatus({ type: "success", message: "Search providers settings saved" });
+    } catch (error) {
+      setSearchProvidersStatus({ type: "error", message: error.message || "Failed to save search providers settings" });
+    } finally {
+      setSearchProvidersSaving(false);
+    }
+  };
   const updateAmpSettings = async (e) => {
     e.preventDefault();
     setAmpLoading(true);
@@ -298,12 +401,14 @@ export default function ProfilePage() {
     }
   };
 
+
   const reloadSettings = async () => {
     try {
       const res = await fetch("/api/settings");
       if (!res.ok) return;
       const data = await res.json();
       setSettings(data);
+      setSearchProvidersForm(normalizeSearchProvidersForm(data?.searchProviders));
     } catch (err) {
       console.error("Failed to reload settings:", err);
     }
@@ -655,6 +760,114 @@ export default function ProfilePage() {
               </p>
             )}
           </div>
+        </Card>
+
+        {/* Search Providers */}
+        <Card>
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2 rounded-lg bg-cyan-500/10 text-cyan-500">
+              <span className="material-symbols-outlined text-[20px]">search</span>
+            </div>
+            <h3 className="text-lg font-semibold">Search Providers</h3>
+          </div>
+          <form onSubmit={saveSearchProvidersSettings} className="flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-medium">Enable local search provider routing</p>
+                <p className="text-sm text-text-muted">Use local provider chain for webSearch2 requests.</p>
+              </div>
+              <Toggle
+                checked={searchProvidersForm.enabled}
+                onChange={(checked) => setSearchProvidersForm((prev) => ({ ...prev, enabled: checked }))}
+                disabled={loading || searchProvidersSaving}
+              />
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-medium">Fallback to Amp upstream</p>
+                <p className="text-sm text-text-muted">When all local providers fail, proxy to upstream.</p>
+              </div>
+              <Toggle
+                checked={searchProvidersForm.fallbackToAmpUpstream}
+                onChange={(checked) => setSearchProvidersForm((prev) => ({ ...prev, fallbackToAmpUpstream: checked }))}
+                disabled={loading || searchProvidersSaving}
+              />
+            </div>
+
+            <Select
+              label="Quota Mode"
+              value={searchProvidersForm.quotaMode}
+              onChange={(e) => setSearchProvidersForm((prev) => ({ ...prev, quotaMode: e.target.value }))}
+              options={[
+                { value: "local", label: "Local" },
+                { value: "provider", label: "Provider" },
+                { value: "hybrid", label: "Hybrid" },
+              ]}
+              disabled={loading || searchProvidersSaving}
+            />
+
+            <div className="flex flex-col gap-3 pt-2 border-t border-border/50">
+              {searchProvidersForm.providers.map((provider, index) => (
+                <div key={provider.type} className="rounded-lg border border-border p-3 flex flex-col gap-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-medium">{provider.name}</p>
+                      <p className="text-xs text-text-muted">Priority #{index + 1}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button type="button" variant="outline" size="sm" onClick={() => moveSearchProvider(index, -1)} disabled={index === 0 || loading || searchProvidersSaving}>↑</Button>
+                      <Button type="button" variant="outline" size="sm" onClick={() => moveSearchProvider(index, 1)} disabled={index === searchProvidersForm.providers.length - 1 || loading || searchProvidersSaving}>↓</Button>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm text-text-muted">Enabled</p>
+                    <Toggle
+                      checked={provider.enabled}
+                      onChange={(checked) => updateSearchProviderField(index, "enabled", checked)}
+                      disabled={loading || searchProvidersSaving}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <Input
+                      label="API Key"
+                      type="password"
+                      placeholder={provider.hasApiKey ? (provider.maskedApiKey || "Configured") : "Enter API key"}
+                      value={provider.apiKey}
+                      onChange={(e) => updateSearchProviderField(index, "apiKey", e.target.value)}
+                      disabled={loading || searchProvidersSaving}
+                    />
+                    <Input
+                      label="Monthly Quota"
+                      type="number"
+                      min="0"
+                      value={provider.monthlyQuota}
+                      onChange={(e) => updateSearchProviderField(index, "monthlyQuota", parseInt(e.target.value || "0", 10))}
+                      disabled={loading || searchProvidersSaving}
+                    />
+                  </div>
+
+                  <div className="text-xs text-text-muted flex flex-col gap-1">
+                    <p>Usage: {provider.usage?.requestCount ?? 0} / {provider.monthlyQuota}</p>
+                    <p>Last sync: {provider.usage?.lastSyncedAt || "Never"}</p>
+                    <p>Secret: {provider.hasApiKey ? (provider.maskedApiKey || "Configured") : "Not configured"}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="pt-2 border-t border-border/50">
+              <Button type="submit" loading={searchProvidersSaving} disabled={loading}>Save Search Providers</Button>
+            </div>
+
+            {searchProvidersStatus.message && (
+              <p className={`text-sm ${searchProvidersStatus.type === "error" ? "text-red-500" : "text-green-500"}`}>
+                {searchProvidersStatus.message}
+              </p>
+            )}
+          </form>
         </Card>
 
         {/* Amp CLI Upstream Configuration */}
