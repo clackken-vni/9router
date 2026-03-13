@@ -120,7 +120,7 @@ export async function GET() {
 // POST - Write new settings and secrets
 export async function POST(request) {
   try {
-    const { url, apiKey, modelMappings } = await request.json();
+    const { url, apiKey, modelMappings, ampInternalOverrides } = await request.json();
 
     if (!url || typeof url !== "string") {
       return NextResponse.json(
@@ -178,10 +178,11 @@ export async function POST(request) {
     // Write secrets
     await fs.writeFile(secretsPath, JSON.stringify(currentSecrets, null, 2));
 
-    // Always save model mappings to 9router settings (even if empty)
+    // Always save model mappings + internal overrides to 9router settings (even if empty)
     const { updateSettings } = await import("@/lib/localDb");
     await updateSettings({
       ampModelMappings: modelMappings || {},
+      ampInternalOverrides: ampInternalOverrides || {},
     });
 
     console.log(`[Amp CLI] Settings applied successfully: ${url}`);

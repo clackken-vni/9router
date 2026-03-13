@@ -56,6 +56,67 @@ const resolveQwenModelsUrl = (connection) => {
   return `https://${value.replace(/\/$/, "")}/v1/models`;
 };
 
+const MAX_MODELS_PAGES = 20;
+
+const dedupeModels = (models) => {
+  const deduped = [];
+  const seen = new Set();
+
+  for (const model of models) {
+    const key = typeof model === "string"
+      ? model
+      : model?.id || model?.name || model?.model || JSON.stringify(model);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(model);
+  }
+
+  return deduped;
+};
+
+const fetchPaginatedModels = async ({ url, fetchOptions, parseResponse }) => {
+  let currentUrl = url;
+  const collected = [];
+
+  for (let page = 0; page < MAX_MODELS_PAGES && currentUrl; page += 1) {
+    const response = await fetch(currentUrl, fetchOptions);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return { ok: false, status: response.status, errorText };
+    }
+
+    const data = await response.json();
+    const pageModels = parseResponse(data);
+    if (Array.isArray(pageModels) && pageModels.length > 0) {
+      collected.push(...pageModels);
+    }
+
+    const nextPage = data?.next_page;
+    if (typeof nextPage === "string" && nextPage) {
+      currentUrl = new URL(nextPage, currentUrl).toString();
+      continue;
+    }
+
+    if (!data?.has_more) break;
+
+    const fallbackLastId = Array.isArray(data?.data) && data.data.length > 0
+      ? data.data[data.data.length - 1]?.id
+      : null;
+    const lastId = data?.last_id || fallbackLastId;
+    if (!lastId) break;
+
+    const nextUrl = new URL(currentUrl);
+    nextUrl.searchParams.set("after_id", lastId);
+    if (!nextUrl.searchParams.has("limit")) {
+      nextUrl.searchParams.set("limit", "100");
+    }
+    currentUrl = nextUrl.toString();
+  }
+
+  return { ok: true, models: dedupeModels(collected) };
+};
+
 // Provider models endpoints configuration
 const PROVIDER_MODELS_CONFIG = {
   claude: {
@@ -187,30 +248,30 @@ export async function GET(request, { params }) {
         return NextResponse.json({ error: "No base URL configured for OpenAI compatible provider" }, { status: 400 });
       }
       const url = `${baseUrl.replace(/\/$/, "")}/models`;
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${connection.apiKey}`,
+      const paginatedResult = await fetchPaginatedModels({
+        url,
+        fetchOptions: {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${connection.apiKey}`,
+          },
         },
+        parseResponse: parseOpenAIStyleModels,
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.log(`Error fetching models from ${connection.provider}:`, errorText);
+      if (!paginatedResult.ok) {
+        console.log(`Error fetching models from ${connection.provider}:`, paginatedResult.errorText);
         return NextResponse.json(
-          { error: `Failed to fetch models: ${response.status}` },
-          { status: response.status }
+          { error: `Failed to fetch models: ${paginatedResult.status}` },
+          { status: paginatedResult.status }
         );
       }
-
-      const data = await response.json();
-      const models = data.data || data.models || [];
 
       return NextResponse.json({
         provider: connection.provider,
         connectionId: connection.id,
-        models
+        models: paginatedResult.models
       });
     }
 
@@ -226,32 +287,32 @@ export async function GET(request, { params }) {
       }
 
       const url = `${baseUrl}/models`;
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": connection.apiKey,
-          "anthropic-version": "2023-06-01",
-          "Authorization": `Bearer ${connection.apiKey}`
+      const paginatedResult = await fetchPaginatedModels({
+        url,
+        fetchOptions: {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": connection.apiKey,
+            "anthropic-version": "2023-06-01",
+            "Authorization": `Bearer ${connection.apiKey}`
+          },
         },
+        parseResponse: parseOpenAIStyleModels,
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.log(`Error fetching models from ${connection.provider}:`, errorText);
+      if (!paginatedResult.ok) {
+        console.log(`Error fetching models from ${connection.provider}:`, paginatedResult.errorText);
         return NextResponse.json(
-          { error: `Failed to fetch models: ${response.status}` },
-          { status: response.status }
+          { error: `Failed to fetch models: ${paginatedResult.status}` },
+          { status: paginatedResult.status }
         );
       }
-
-      const data = await response.json();
-      const models = data.data || data.models || [];
 
       return NextResponse.json({
         provider: connection.provider,
         connectionId: connection.id,
-        models
+        models: paginatedResult.models
       });
     }
 
@@ -384,24 +445,24 @@ export async function GET(request, { params }) {
       fetchOptions.body = JSON.stringify(config.body);
     }
 
-    const response = await fetch(url, fetchOptions);
+    const paginatedResult = await fetchPaginatedModels({
+      url,
+      fetchOptions,
+      parseResponse: config.parseResponse,
+    });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.log(`Error fetching models from ${connection.provider}:`, errorText);
+    if (!paginatedResult.ok) {
+      console.log(`Error fetching models from ${connection.provider}:`, paginatedResult.errorText);
       return NextResponse.json(
-        { error: `Failed to fetch models: ${response.status}` },
-        { status: response.status }
+        { error: `Failed to fetch models: ${paginatedResult.status}` },
+        { status: paginatedResult.status }
       );
     }
-
-    const data = await response.json();
-    const models = config.parseResponse(data);
 
     return NextResponse.json({
       provider: connection.provider,
       connectionId: connection.id,
-      models
+      models: paginatedResult.models
     });
   } catch (error) {
     console.log("Error fetching provider models:", error);

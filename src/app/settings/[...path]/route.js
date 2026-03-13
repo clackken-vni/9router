@@ -1,21 +1,29 @@
 import { NextResponse } from "next/server";
 
 /**
- * Amp CLI Auth Catch-All Proxy
+ * Amp CLI Settings Catch-All Proxy
  * 
- * Proxies ALL /auth/* requests to ampcode.com
- * Handles OAuth flows, sign-in, sign-out, etc.
+ * Proxies ALL /settings/* requests to ampcode.com
+ * Handles nested paths like /settings/github/callback, etc.
  */
 
 export async function GET(request, { params }) {
-  return proxyAuthRequest(request, await params);
+  return proxyRequest(request, await params);
 }
 
 export async function POST(request, { params }) {
-  return proxyAuthRequest(request, await params);
+  return proxyRequest(request, await params);
 }
 
-async function proxyAuthRequest(request, params) {
+export async function PUT(request, { params }) {
+  return proxyRequest(request, await params);
+}
+
+export async function DELETE(request, { params }) {
+  return proxyRequest(request, await params);
+}
+
+async function proxyRequest(request, params) {
   try {
     const { getSettings } = await import("@/lib/localDb");
     const settings = await getSettings();
@@ -28,11 +36,11 @@ async function proxyAuthRequest(request, params) {
     const url = new URL(request.url);
     const pathSegments = params?.path ? (Array.isArray(params.path) ? params.path : [params.path]) : [];
     const fullPath = pathSegments.join("/");
-    const upstreamUrl = `${ampUpstreamUrl}/auth/${fullPath}${url.search}`;
+    const upstreamUrl = `${ampUpstreamUrl}/settings/${fullPath}${url.search}`;
     
-    console.log(`[Auth Proxy] ${request.method} ${upstreamUrl}`);
+    console.log(`[Settings Proxy] ${request.method} ${upstreamUrl}`);
     
-    // Build headers - forward cookies and auth
+    // Build headers
     const headers = {
       "Authorization": `Bearer ${ampUpstreamApiKey}`,
     };
@@ -69,9 +77,8 @@ async function proxyAuthRequest(request, params) {
         } else {
           rewrittenLocation = location.replace(ampUpstreamUrl, url.origin);
         }
-        console.log(`[Auth Proxy] Redirect: ${location} -> ${rewrittenLocation}`);
+        console.log(`[Settings Proxy] Redirect: ${location} -> ${rewrittenLocation}`);
         
-        // Forward Set-Cookie headers
         const responseHeaders = new Headers();
         responseHeaders.set("Location", rewrittenLocation);
         const setCookies = response.headers.getSetCookie();
@@ -93,8 +100,7 @@ async function proxyAuthRequest(request, params) {
       finalBody = responseBody
         .replace(new RegExp(ampUpstreamUrl, "g"), url.origin)
         .replace(/href="\/(?!api)/g, `href="${url.origin}/`)
-        .replace(/src="\/(?!api)/g, `src="${url.origin}/`)
-        .replace(/action="\/auth/g, `action="${url.origin}/auth`);
+        .replace(/src="\/(?!api)/g, `src="${url.origin}/`);
     }
     
     // Forward Set-Cookie headers
@@ -110,7 +116,7 @@ async function proxyAuthRequest(request, params) {
     });
     
   } catch (error) {
-    console.error("[Auth Proxy] Error:", error);
+    console.error("[Settings Proxy] Error:", error);
     return new Response(error.message, { status: 500 });
   }
 }

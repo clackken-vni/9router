@@ -35,7 +35,7 @@ export async function GET(request, { params }) {
       const authData = generateAuthData(provider, null);
       
       // Providers that don't use PKCE for device code
-      const noPkceDeviceProviders = ["github", "kiro", "kimi-coding", "kilocode"];
+      const noPkceDeviceProviders = ["github", "github-code-host", "kiro", "kimi-coding", "kilocode"];
       let deviceData;
       if (noPkceDeviceProviders.includes(provider)) {
         deviceData = await requestDeviceCode(provider);
@@ -111,7 +111,7 @@ export async function POST(request, { params }) {
       }
 
       // Providers that don't use PKCE for device code
-      const noPkceProviders = ["github", "kimi-coding", "kilocode"];
+      const noPkceProviders = ["github", "github-code-host", "kimi-coding", "kilocode"];
       let result;
       if (noPkceProviders.includes(provider)) {
         result = await pollForToken(provider, deviceCode);
@@ -140,6 +140,7 @@ export async function POST(request, { params }) {
 
         return NextResponse.json({ 
           success: true, 
+          status: "completed",
           connection: {
             id: connection.id,
             provider: connection.provider,
@@ -152,6 +153,7 @@ export async function POST(request, { params }) {
       
       return NextResponse.json({
         success: false,
+        status: isPending ? "pending" : "error",
         error: result.error,
         errorDescription: result.errorDescription,
         pending: isPending,

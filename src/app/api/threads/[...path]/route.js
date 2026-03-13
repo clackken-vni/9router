@@ -1,15 +1,40 @@
 import { NextResponse } from "next/server";
 import { getSettings, getApiKeys } from "@/lib/localDb";
+import { addDebugLog } from "@/app/api/debug-logs/route";
 
 /**
  * Amp CLI Threads API Proxy
  * Route: /api/threads/...
  */
 
+function logThreadsRequest(method, pathname, body = null) {
+  const logEntry = {
+    timestamp: new Date().toISOString(),
+    type: "threads-proxy",
+    method,
+    path: pathname,
+    body: body ? JSON.stringify(body).slice(0, 500) : null,
+  };
+
+  console.log("\n" + "▒".repeat(70));
+  console.log(`[${logEntry.timestamp}] [THREADS PROXY] ${method} ${pathname}`);
+  if (body) {
+    console.log(`Body: ${logEntry.body}`);
+  }
+  console.log("▒".repeat(70) + "\n");
+
+  try {
+    addDebugLog("threads-request", logEntry);
+  } catch (e) {}
+}
+
 export async function POST(request) {
   try {
     const url = new URL(request.url);
     const pathname = url.pathname;
+
+    const body = await request.json();
+    logThreadsRequest("POST", pathname, body);
 
     const settings = await getSettings();
     const { ampUpstreamUrl, ampUpstreamApiKey, ampRestrictManagementToLocalhost } = settings;
@@ -42,7 +67,6 @@ export async function POST(request) {
     }
 
     const upstreamUrl = `${ampUpstreamUrl}${pathname}${url.search}`;
-    const body = await request.json();
 
     const response = await fetch(upstreamUrl, {
       method: "POST",
@@ -76,6 +100,8 @@ export async function GET(request) {
   try {
     const url = new URL(request.url);
     const pathname = url.pathname;
+
+    logThreadsRequest("GET", pathname);
 
     const settings = await getSettings();
     const { ampUpstreamUrl, ampUpstreamApiKey, ampRestrictManagementToLocalhost } = settings;
@@ -128,6 +154,8 @@ export async function DELETE(request) {
   try {
     const url = new URL(request.url);
     const pathname = url.pathname;
+
+    logThreadsRequest("DELETE", pathname);
 
     const settings = await getSettings();
     const { ampUpstreamUrl, ampUpstreamApiKey, ampRestrictManagementToLocalhost } = settings;

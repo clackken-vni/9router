@@ -66,6 +66,67 @@ const resolveQwenModelsUrl = (connection) => {
   return `https://${value.replace(/\/$/, "")}/v1/models`;
 };
 
+const MAX_MODELS_PAGES = 20;
+
+const dedupeModels = (models) => {
+  const deduped = [];
+  const seen = new Set();
+
+  for (const model of models) {
+    const key = typeof model === "string"
+      ? model
+      : model?.id || model?.name || model?.model || JSON.stringify(model);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(model);
+  }
+
+  return deduped;
+};
+
+const fetchPaginatedModels = async ({ url, fetchOptions, parseResponse }) => {
+  let currentUrl = url;
+  const collected = [];
+
+  for (let page = 0; page < MAX_MODELS_PAGES && currentUrl; page += 1) {
+    const response = await fetch(currentUrl, fetchOptions);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return { success: false, status: response.status, errorText };
+    }
+
+    const data = await response.json();
+    const pageModels = parseResponse(data);
+    if (Array.isArray(pageModels) && pageModels.length > 0) {
+      collected.push(...pageModels);
+    }
+
+    const nextPage = data?.next_page;
+    if (typeof nextPage === "string" && nextPage) {
+      currentUrl = new URL(nextPage, currentUrl).toString();
+      continue;
+    }
+
+    if (!data?.has_more) break;
+
+    const fallbackLastId = Array.isArray(data?.data) && data.data.length > 0
+      ? data.data[data.data.length - 1]?.id
+      : null;
+    const lastId = data?.last_id || fallbackLastId;
+    if (!lastId) break;
+
+    const nextUrl = new URL(currentUrl);
+    nextUrl.searchParams.set("after_id", lastId);
+    if (!nextUrl.searchParams.has("limit")) {
+      nextUrl.searchParams.set("limit", "100");
+    }
+    currentUrl = nextUrl.toString();
+  }
+
+  return { success: true, models: dedupeModels(collected) };
+};
+
 
 const PROVIDER_MODELS_CONFIG = {
   claude: {
@@ -192,22 +253,24 @@ export async function autoFetchModels(connectionId) {
       }
       
       const url = `${baseUrl.replace(/\/$/, "")}/models`;
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${connection.apiKey}`,
+      const paginatedResult = await fetchPaginatedModels({
+        url,
+        fetchOptions: {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${connection.apiKey}`,
+          },
         },
+        parseResponse: parseOpenAIStyleModels,
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.log(`[autoFetchModels] Failed to fetch models from ${connection.provider}:`, errorText);
-        return { success: false, error: `HTTP ${response.status}` };
+      if (!paginatedResult.success) {
+        console.log(`[autoFetchModels] Failed to fetch models from ${connection.provider}:`, paginatedResult.errorText);
+        return { success: false, error: `HTTP ${paginatedResult.status}` };
       }
 
-      const data = await response.json();
-      models = data.data || data.models || [];
+      models = paginatedResult.models;
     }
     else if (isAnthropicCompatibleProvider(connection.provider)) {
       let baseUrl = connection.providerSpecificData?.baseUrl;
@@ -222,24 +285,26 @@ export async function autoFetchModels(connectionId) {
       }
 
       const url = `${baseUrl}/models`;
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": connection.apiKey,
-          "anthropic-version": "2023-06-01",
-          "Authorization": `Bearer ${connection.apiKey}`
+      const paginatedResult = await fetchPaginatedModels({
+        url,
+        fetchOptions: {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": connection.apiKey,
+            "anthropic-version": "2023-06-01",
+            "Authorization": `Bearer ${connection.apiKey}`
+          },
         },
+        parseResponse: parseOpenAIStyleModels,
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.log(`[autoFetchModels] Failed to fetch models from ${connection.provider}:`, errorText);
-        return { success: false, error: `HTTP ${response.status}` };
+      if (!paginatedResult.success) {
+        console.log(`[autoFetchModels] Failed to fetch models from ${connection.provider}:`, paginatedResult.errorText);
+        return { success: false, error: `HTTP ${paginatedResult.status}` };
       }
 
-      const data = await response.json();
-      models = data.data || data.models || [];
+      models = paginatedResult.models;
     }
     else if (connection.provider === "kiro") {
       try {
@@ -345,16 +410,18 @@ export async function autoFetchModels(connectionId) {
         fetchOptions.body = JSON.stringify(config.body);
       }
 
-      const response = await fetch(url, fetchOptions);
+      const paginatedResult = await fetchPaginatedModels({
+        url,
+        fetchOptions,
+        parseResponse: config.parseResponse,
+      });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.log(`[autoFetchModels] Failed to fetch models from ${connection.provider}:`, errorText);
-        return { success: false, error: `HTTP ${response.status}` };
+      if (!paginatedResult.success) {
+        console.log(`[autoFetchModels] Failed to fetch models from ${connection.provider}:`, paginatedResult.errorText);
+        return { success: false, error: `HTTP ${paginatedResult.status}` };
       }
 
-      const data = await response.json();
-      models = config.parseResponse(data);
+      models = paginatedResult.models;
     }
 
     await updateProviderConnection(connectionId, {

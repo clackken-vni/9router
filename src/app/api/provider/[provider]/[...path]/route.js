@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSettings, getApiKeys } from "@/lib/localDb";
+import { addDebugLog } from "@/app/api/debug-logs/route";
 
 /**
  * Amp CLI Provider API Proxy
@@ -10,6 +11,196 @@ import { getSettings, getApiKeys } from "@/lib/localDb";
  * 2. If YES: Route to local 9router providers (preserve API shape)
  * 3. If NO: Forward to ampcode.com as reverse proxy
  */
+
+// Debug: Log ALL Amp CLI requests
+const DEBUG_ALL_REQUESTS = true;
+
+// Agent detection based on model
+const MODEL_TO_AGENT = {
+  "claude-opus-4-6": "smart",
+  "gpt-5.3-codex": "deep",
+  "claude-sonnet-4-5": "librarian",
+  "claude-sonnet-4-5-20241022": "librarian",
+  "claude-sonnet-4-6": "librarian",
+  "claude-haiku-4-5": "rush",
+  "claude-haiku-4-5-20251001": "rush",
+  "gemini-3-flash-preview": "search",
+  "gpt-5.2": "oracle",
+  "gpt-5.4": "oracle",
+  "gemini-3-pro-preview": "review",
+  "gemini-2.5-flash": "handoff",
+  "gemini-2.5-flash-lite-preview-09-2025": "topics",
+};
+
+function detectAgent(body) {
+  const model = body?.model || "";
+  
+  // Check metadata.agent
+  if (body?.metadata?.agent) {
+    return body.metadata.agent;
+  }
+  
+  // Check model mapping
+  if (MODEL_TO_AGENT[model]) {
+    return MODEL_TO_AGENT[model];
+  }
+  
+  // Check system prompt for agent hints
+  const system = String(body?.system || "").toLowerCase();
+  if (system.includes("librarian")) return "librarian";
+  if (system.includes("oracle")) return "oracle";
+  if (system.includes("search")) return "search";
+  
+  return "unknown";
+}
+
+function logRequest(provider, fullPath, body, headers, response = null) {
+  const model = body?.model || "unknown";
+  const agent = detectAgent(body);
+  const timestamp = new Date().toISOString();
+  
+  // Check for special tools that need external auth
+  const toolNames = (body?.tools || []).map(t => t?.function?.name || t?.name || "unknown");
+  const needsGitHub = toolNames.some(t => 
+    t.includes("github") || t.includes("commit_search") || t.includes("list_repositories")
+  );
+  
+  // Build log entry
+  const logEntry = {
+    timestamp,
+    provider,
+    path: `/api/provider/${provider}/${fullPath}`,
+    model,
+    agent,
+    method: "POST",
+    needsGitHub,
+    headers: {},
+    bodySummary: {
+      messages: body?.messages?.length || 0,
+      tools: body?.tools?.length || 0,
+      toolNames: toolNames.slice(0, 10),
+      stream: body?.stream,
+      max_tokens: body?.max_tokens,
+    },
+    metadata: body?.metadata || null,
+    systemHint: body?.system ? String(body?.system).slice(0, 200) + "..." : null,
+    firstMessage: body?.messages?.[0]?.content ? 
+      String(body.messages[0].content).slice(0, 300) + "..." : null,
+    response: response ? {
+      status: response.status,
+      type: response.type,
+    } : null,
+  };
+
+  // Capture headers (redact sensitive)
+  for (const [key, value] of Object.entries(headers || {})) {
+    const k = key.toLowerCase();
+    if (k.includes("auth") || k.includes("api-key") || k.includes("token")) {
+      logEntry.headers[key] = value ? String(value).slice(0, 20) + "..." : "(empty)";
+    } else if (k === "host" || k === "user-agent" || k === "content-type" || k === "accept") {
+      logEntry.headers[key] = value;
+    }
+  }
+
+  // Console output with AGENT highlighted
+  console.log("\n" + "═".repeat(70));
+  console.log(`[${timestamp}] [AMP CLI] ${"█".repeat(20)}`);
+  console.log(`► AGENT: ${agent.toUpperCase()}`);
+  console.log(`► Model: ${model}`);
+  console.log(`► Provider: ${provider}`);
+  if (needsGitHub) {
+    console.log(`► ⚠️ NEEDS GITHUB AUTH`);
+  }
+  console.log("═".repeat(70));
+  console.log(`Path: ${logEntry.path}`);
+  console.log(`Tools (${logEntry.bodySummary.tools}):`, logEntry.bodySummary.toolNames.join(", "));
+  if (logEntry.metadata) {
+    console.log(`Metadata:`, JSON.stringify(logEntry.metadata));
+  }
+  if (logEntry.firstMessage) {
+    console.log(`First msg: ${logEntry.firstMessage}`);
+  }
+  if (response) {
+    console.log(`Response: ${response.status}`);
+  }
+  console.log("═".repeat(70) + "\n");
+
+  // Save to debug API
+  try {
+    addDebugLog("amp-request", logEntry);
+  } catch (e) {}
+
+  return logEntry;
+}
+
+function logLocalDelivery({ requestedModel, localModel, internalUrl, modifiedBody }) {
+  const timestamp = new Date().toISOString();
+  console.log("\n" + "▓".repeat(72));
+  console.log(`[${timestamp}] [AMP LOCAL DELIVERY]`);
+  console.log(`Requested:    ${requestedModel || "(none)"}`);
+  console.log(`Delivered To: ${localModel || "(none)"}`);
+  console.log(`Internal URL: ${internalUrl}`);
+  console.log(`Body Model:   ${modifiedBody?.model || "(none)"}`);
+  console.log(`Stream:       ${modifiedBody?.stream}`);
+  console.log(`Tools:        ${(modifiedBody?.tools || []).length}`);
+  console.log("▓".repeat(72) + "\n");
+  try {
+    addDebugLog("amp-local-delivery", {
+      timestamp,
+      requestedModel,
+      localModel,
+      internalUrl,
+      bodyModel: modifiedBody?.model || null,
+      stream: modifiedBody?.stream,
+      tools: (modifiedBody?.tools || []).length,
+    });
+  } catch {}
+}
+
+async function buildLoggedProxyResponse(response, meta) {
+  const contentType = response.headers.get("Content-Type") || response.headers.get("content-type") || "application/json";
+  const isSSE = contentType.includes("text/event-stream");
+  const cloned = response.clone();
+  let preview = null;
+
+  try {
+    if (isSSE) {
+      preview = "[stream opened: SSE response]";
+    } else if (contentType.includes("application/json")) {
+      preview = await cloned.json();
+    } else {
+      const text = await cloned.text();
+      preview = text.slice(0, 2000);
+    }
+  } catch (error) {
+    preview = { previewError: error.message };
+  }
+
+  const timestamp = new Date().toISOString();
+  console.log("\n" + "▒".repeat(72));
+  console.log(`[${timestamp}] [AMP LOCAL RESPONSE]`);
+  console.log(`Requested:    ${meta.requestedModel || "(none)"}`);
+  console.log(`Delivered To: ${meta.localModel || "(none)"}`);
+  console.log(`Status:       ${response.status}`);
+  console.log(`Content-Type: ${contentType}`);
+  console.log(`Preview:      ${typeof preview === "string" ? preview : JSON.stringify(preview).slice(0, 2000)}`);
+  console.log("▒".repeat(72) + "\n");
+
+  try {
+    addDebugLog("amp-local-response", {
+      timestamp,
+      ...meta,
+      status: response.status,
+      contentType,
+      preview,
+    });
+  } catch {}
+
+  return new Response(response.body, {
+    status: response.status,
+    headers: buildProxyResponseHeaders(response),
+  });
+}
 
 function extractApiKeyFromRequest(request) {
   const authHeader = request.headers.get("authorization");
@@ -54,31 +245,84 @@ function buildProxyResponseHeaders(response) {
   return headers;
 }
 
+function logRoutingDecision({ provider, fullPath, requestedModel, agent, localModel, matchedBy, routeTarget, forcedReason, ampModelMappings }) {
+  const timestamp = new Date().toISOString();
+  const mappingKeys = Object.keys(ampModelMappings || {});
+  const isLibrarian = agent === "librarian" || requestedModel === "claude-sonnet-4-6" || requestedModel === "claude-sonnet-4-5" || requestedModel === "claude-sonnet-4-5-20241022";
+
+  console.log("\n" + "█".repeat(72));
+  console.log(`[${timestamp}] [AMP ROUTING DECISION]`);
+  console.log(`Agent:        ${agent}`);
+  console.log(`Is Librarian: ${isLibrarian ? "YES" : "NO"}`);
+  console.log(`Provider:     ${provider}`);
+  console.log(`Path:         /api/provider/${provider}/${fullPath}`);
+  console.log(`Requested:    ${requestedModel || "(none)"}`);
+  console.log(`Mapped Model: ${localModel || "(miss)"}`);
+  console.log(`Mapping Hit:  ${localModel ? "YES" : "NO"}`);
+  console.log(`Matched By:   ${matchedBy || "none"}`);
+  console.log(`Route Target: ${routeTarget}`);
+  if (forcedReason) console.log(`Forced By:    ${forcedReason}`);
+  console.log(`Mapping Keys: ${mappingKeys.join(", ") || "(empty)"}`);
+  console.log("█".repeat(72) + "\n");
+
+  try {
+    addDebugLog("amp-routing", {
+      timestamp,
+      provider,
+      fullPath,
+      requestedModel,
+      agent,
+      isLibrarian,
+      localModel,
+      mappingHit: !!localModel,
+      matchedBy: matchedBy || null,
+      routeTarget,
+      forcedReason: forcedReason || null,
+      mappingKeys,
+    });
+  } catch {}
+}
+
 function resolveMappedModel(ampModelMappings, requestedModel) {
-  if (!requestedModel || !ampModelMappings) return null;
+  if (!requestedModel || !ampModelMappings) return { localModel: null, matchedBy: null };
 
   // Direct mapping (new style where key is exact Amp model id)
-  if (ampModelMappings[requestedModel]) return ampModelMappings[requestedModel];
+  if (ampModelMappings[requestedModel]) {
+    return { localModel: ampModelMappings[requestedModel], matchedBy: `exact:${requestedModel}` };
+  }
 
   // Backward compatibility: legacy slot keys (smart/rush/oracle/...)
   const legacySlotByModel = {
+    // Smart - Claude Opus 4.6
     "claude-opus-4-6": "smart",
+    // Deep - GPT-5.3 Codex
     "gpt-5.3-codex": "deep",
+    // Librarian - Claude Sonnet 4.5/4.6
     "claude-sonnet-4-5": "librarian",
     "claude-sonnet-4-5-20241022": "librarian",
+    "claude-sonnet-4-6": "librarian",
+    // Rush - Claude Haiku 4.5
     "claude-haiku-4-5": "rush",
     "claude-haiku-4-5-20251001": "rush",
+    // Search - Gemini 3 Flash
     "gemini-3-flash-preview": "search",
+    // Oracle - GPT-5.2/5.4
     "gpt-5.2": "oracle",
+    "gpt-5.4": "oracle",
+    // Review - Gemini 3 Pro
     "gemini-3-pro-preview": "review",
+    // Handoff - Gemini 2.5 Flash
     "gemini-2.5-flash": "handoff",
+    // Topics - Gemini 2.5 Flash-Lite
     "gemini-2.5-flash-lite-preview-09-2025": "topics",
   };
 
   const legacySlot = legacySlotByModel[requestedModel];
-  if (legacySlot && ampModelMappings[legacySlot]) return ampModelMappings[legacySlot];
+  if (legacySlot && ampModelMappings[legacySlot]) {
+    return { localModel: ampModelMappings[legacySlot], matchedBy: `legacy-slot:${legacySlot}` };
+  }
 
-  return null;
+  return { localModel: null, matchedBy: legacySlot ? `legacy-slot-miss:${legacySlot}` : null };
 }
 
 export async function POST(request, { params }) {
@@ -117,12 +361,30 @@ export async function POST(request, { params }) {
     const body = await request.json();
     const requestedModel = body.model;
 
+    // Debug logging for ALL Amp CLI requests
+    const requestHeaders = Object.fromEntries(request.headers.entries());
+    logRequest(provider, fullPath, body, requestHeaders);
+
     // Check if this model is mapped locally
-    const localModel = resolveMappedModel(ampModelMappings, requestedModel);
+    const { localModel, matchedBy } = resolveMappedModel(ampModelMappings, requestedModel);
+    
+    // NOTE: Do NOT force provider requests upstream based on tool names.
+    // GitHub auth is handled separately via /api/internal/github-auth-status.
+    const needsGitHub = false;
 
     const effectiveBody = applyAmpStreamDefault(body, fullPath);
 
     if (localModel) {
+      logRoutingDecision({
+        provider,
+        fullPath,
+        requestedModel,
+        agent: detectAgent(body),
+        localModel,
+        matchedBy,
+        routeTarget: "local-9router",
+        ampModelMappings,
+      });
       // Route to local 9router provider
       console.log(`[Amp Proxy] Routing ${requestedModel} to local model: ${localModel}`);
 
@@ -138,6 +400,12 @@ export async function POST(request, { params }) {
       };
 
       // Use special internal proxy header to bypass auth
+      logLocalDelivery({
+        requestedModel,
+        localModel,
+        internalUrl: internalUrl.toString(),
+        modifiedBody,
+      });
       const response = await fetch(internalUrl.toString(), {
         method: "POST",
         headers: buildForwardHeaders(request, {
@@ -147,11 +415,27 @@ export async function POST(request, { params }) {
         body: JSON.stringify(modifiedBody),
       });
 
-      return new Response(response.body, {
-        status: response.status,
-        headers: buildProxyResponseHeaders(response),
+      // Log response status for debugging
+      console.log(`[Amp Proxy] Response: ${response.status} for ${requestedModel}`);
+
+      return await buildLoggedProxyResponse(response, {
+        requestedModel,
+        localModel,
+        provider,
+        fullPath,
+        routeTarget: "local-9router",
       });
     } else {
+      logRoutingDecision({
+        provider,
+        fullPath,
+        requestedModel,
+        agent: detectAgent(body),
+        localModel,
+        matchedBy,
+        routeTarget: "ampcode-upstream",
+        ampModelMappings,
+      });
       // Forward to ampcode.com
       console.log(`[Amp Proxy] Forwarding ${requestedModel} to upstream: ${ampUpstreamUrl}`);
 
@@ -172,6 +456,9 @@ export async function POST(request, { params }) {
         }),
         body: JSON.stringify(effectiveBody),
       });
+
+      // Log response status for debugging
+      console.log(`[Amp Proxy] Upstream Response: ${response.status} for ${requestedModel}`);
 
       return new Response(response.body, {
         status: response.status,

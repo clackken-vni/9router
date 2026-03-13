@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSettings, getApiKeys } from "@/lib/localDb";
+import { addDebugLog } from "@/app/api/debug-logs/route";
 
 /**
  * Amp CLI Management API Proxy
@@ -12,10 +13,35 @@ import { getSettings, getApiKeys } from "@/lib/localDb";
  * 4. Auto-decompress gzipped responses
  */
 
+function logAuthRequest(method, pathname, body = null) {
+  const logEntry = {
+    timestamp: new Date().toISOString(),
+    type: "auth-proxy",
+    method,
+    path: pathname,
+    body: body ? JSON.stringify(body).slice(0, 500) : null,
+  };
+
+  console.log("\n" + "░".repeat(70));
+  console.log(`[${logEntry.timestamp}] [AUTH PROXY] ${method} ${pathname}`);
+  if (body) {
+    console.log(`Body: ${logEntry.body}`);
+  }
+  console.log("░".repeat(70) + "\n");
+
+  try {
+    addDebugLog("auth-request", logEntry);
+  } catch (e) {}
+}
+
 export async function POST(request) {
   try {
     const url = new URL(request.url);
     const pathname = url.pathname;
+
+    // Log all auth requests
+    const body = await request.json();
+    logAuthRequest("POST", pathname, body);
 
     // Get settings for Amp configuration
     const settings = await getSettings();
@@ -66,8 +92,6 @@ export async function POST(request) {
     const upstreamUrl = `${ampUpstreamUrl}${pathname}${url.search}`;
     console.log(`[Amp Management Proxy] Forwarding to: ${upstreamUrl}`);
 
-    const body = await request.json();
-
     const response = await fetch(upstreamUrl, {
       method: "POST",
       headers: {
@@ -105,6 +129,9 @@ export async function GET(request) {
   try {
     const url = new URL(request.url);
     const pathname = url.pathname;
+
+    // Log all auth requests
+    logAuthRequest("GET", pathname);
 
     const settings = await getSettings();
     const { ampUpstreamUrl, ampUpstreamApiKey, ampRestrictManagementToLocalhost } = settings;

@@ -118,16 +118,40 @@ export function filterToOpenAIFormat(body) {
   }
 
   // Normalize tool_choice to OpenAI format
+  // NOTE: tool_choice does NOT support "required" or object type in thinking mode
+  // Must remove tool_choice when thinking is enabled to avoid 400 error
+  const hasThinking = !!(body.reasoning_effort || body.thinking?.type === "enabled");
+  
   if (body.tool_choice && typeof body.tool_choice === "object") {
     const choice = body.tool_choice;
     // Claude format: {type: "auto|any|tool", name?: "..."}
     if (choice.type === "auto") {
       body.tool_choice = "auto";
     } else if (choice.type === "any") {
-      body.tool_choice = "required";
+      // Remove tool_choice if thinking mode enabled, otherwise set to "required"
+      if (hasThinking) {
+        delete body.tool_choice;
+      } else {
+        body.tool_choice = "required";
+      }
     } else if (choice.type === "tool" && choice.name) {
-      body.tool_choice = { type: "function", function: { name: choice.name } };
+      // Remove tool_choice object if thinking mode enabled, otherwise convert
+      if (hasThinking) {
+        delete body.tool_choice;
+      } else {
+        body.tool_choice = { type: "function", function: { name: choice.name } };
+      }
     }
+  }
+  
+  // Also remove string tool_choice "required" if thinking mode enabled
+  if (hasThinking && body.tool_choice === "required") {
+    delete body.tool_choice;
+  }
+  
+  // Remove tool_choice object type if thinking mode enabled
+  if (hasThinking && typeof body.tool_choice === "object") {
+    delete body.tool_choice;
   }
 
   return body;

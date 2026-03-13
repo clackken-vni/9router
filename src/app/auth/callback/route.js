@@ -1,21 +1,22 @@
 import { NextResponse } from "next/server";
 
 /**
- * Amp CLI Auth Catch-All Proxy
+ * Amp CLI Auth Callback Proxy
  * 
- * Proxies ALL /auth/* requests to ampcode.com
- * Handles OAuth flows, sign-in, sign-out, etc.
+ * Proxies /auth/callback requests to ampcode.com
+ * This is the OAuth callback endpoint after user authenticates
+ * 
+ * Flow:
+ * 1. User clicks "Connect GitHub" from AMP CLI
+ * 2. Browser opens http://localhost:20127/settings#code-host-connections
+ * 3. User authenticates with GitHub via ampcode.com
+ * 4. GitHub redirects to ampcode.com/auth/callback?code=xxx&state=xxx
+ * 5. ampcode.com redirects to our proxy: http://localhost:20127/auth/callback?code=xxx&state=xxx
+ * 6. We proxy to ampcode.com to complete the OAuth flow
+ * 7. AMP CLI receives the result
  */
 
-export async function GET(request, { params }) {
-  return proxyAuthRequest(request, await params);
-}
-
-export async function POST(request, { params }) {
-  return proxyAuthRequest(request, await params);
-}
-
-async function proxyAuthRequest(request, params) {
+export async function GET(request) {
   try {
     const { getSettings } = await import("@/lib/localDb");
     const settings = await getSettings();
@@ -26,36 +27,24 @@ async function proxyAuthRequest(request, params) {
     }
     
     const url = new URL(request.url);
-    const pathSegments = params?.path ? (Array.isArray(params.path) ? params.path : [params.path]) : [];
-    const fullPath = pathSegments.join("/");
-    const upstreamUrl = `${ampUpstreamUrl}/auth/${fullPath}${url.search}`;
+    const code = url.searchParams.get("code");
+    const state = url.searchParams.get("state");
+    const hash = url.hash; // e.g., #code-host-connections
     
-    console.log(`[Auth Proxy] ${request.method} ${upstreamUrl}`);
+    console.log(`[Auth Callback] Code: ${code?.substring(0, 10)}..., State: ${state?.substring(0, 20)}...`);
     
-    // Build headers - forward cookies and auth
-    const headers = {
-      "Authorization": `Bearer ${ampUpstreamApiKey}`,
-    };
+    // Forward to ampcode.com
+    const upstreamUrl = `${ampUpstreamUrl}/auth/callback${url.search}${hash}`;
     
-    const contentType = request.headers.get("content-type");
-    if (contentType) headers["Content-Type"] = contentType;
-    
-    const accept = request.headers.get("accept");
-    if (accept) headers["Accept"] = accept;
-    
-    const cookie = request.headers.get("cookie");
-    if (cookie) headers["Cookie"] = cookie;
-    
-    // Get body for POST/PUT
-    let body = undefined;
-    if (["POST", "PUT", "PATCH"].includes(request.method)) {
-      body = await request.text();
-    }
+    console.log(`[Auth Callback] Proxying to: ${upstreamUrl}`);
     
     const response = await fetch(upstreamUrl, {
-      method: request.method,
-      headers,
-      body,
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${ampUpstreamApiKey}`,
+        "Accept": "text/html,application/json",
+        "Cookie": request.headers.get("cookie") || "",
+      },
       redirect: "manual",
     });
     
@@ -69,9 +58,8 @@ async function proxyAuthRequest(request, params) {
         } else {
           rewrittenLocation = location.replace(ampUpstreamUrl, url.origin);
         }
-        console.log(`[Auth Proxy] Redirect: ${location} -> ${rewrittenLocation}`);
+        console.log(`[Auth Callback] Redirect: ${location} -> ${rewrittenLocation}`);
         
-        // Forward Set-Cookie headers
         const responseHeaders = new Headers();
         responseHeaders.set("Location", rewrittenLocation);
         const setCookies = response.headers.getSetCookie();
@@ -84,13 +72,13 @@ async function proxyAuthRequest(request, params) {
       }
     }
     
-    const responseContentType = response.headers.get("content-type") || "text/html";
-    const responseBody = await response.text();
+    const contentType = response.headers.get("content-type") || "text/html";
+    const body = await response.text();
     
     // Rewrite URLs in HTML
-    let finalBody = responseBody;
-    if (responseContentType.includes("text/html")) {
-      finalBody = responseBody
+    let rewrittenBody = body;
+    if (contentType.includes("text/html")) {
+      rewrittenBody = body
         .replace(new RegExp(ampUpstreamUrl, "g"), url.origin)
         .replace(/href="\/(?!api)/g, `href="${url.origin}/`)
         .replace(/src="\/(?!api)/g, `src="${url.origin}/`)
@@ -99,18 +87,18 @@ async function proxyAuthRequest(request, params) {
     
     // Forward Set-Cookie headers
     const responseHeaders = new Headers();
-    responseHeaders.set("Content-Type", responseContentType);
+    responseHeaders.set("Content-Type", contentType);
     responseHeaders.set("Cache-Control", "no-cache");
     const setCookies = response.headers.getSetCookie();
     setCookies.forEach(cookie => responseHeaders.append("Set-Cookie", cookie));
     
-    return new Response(finalBody, {
+    return new Response(rewrittenBody, {
       status: response.status,
       headers: responseHeaders,
     });
     
   } catch (error) {
-    console.error("[Auth Proxy] Error:", error);
+    console.error("[Auth Callback] Error:", error);
     return new Response(error.message, { status: 500 });
   }
 }
