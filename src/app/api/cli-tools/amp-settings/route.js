@@ -28,6 +28,21 @@ const checkAmpInstalled = async () => {
     await execAsync(command, { windowsHide: true });
     return true;
   } catch {
+    // Fallback: check common paths for amp binary
+    const homeDir = os.homedir();
+    const commonPaths = [
+      "/opt/homebrew/bin/amp",
+      "/usr/local/bin/amp",
+      "/usr/bin/amp",
+      path.join(homeDir, ".local/bin/amp"),
+    ];
+    
+    for (const ampPath of commonPaths) {
+      try {
+        await fs.access(ampPath, fs.constants.X_OK);
+        return true;
+      } catch {}
+    }
     return false;
   }
 };
