@@ -175,7 +175,8 @@ function cloneDefaultData() {
       ampUpstreamApiKey: "",
       ampRestrictManagementToLocalhost: false,
       ampModelMappings: {},
-      ampInternalOverrides: buildDefaultAmpInternalOverrides()
+      ampInternalOverrides: buildDefaultAmpInternalOverrides(),
+      searchProviders: buildDefaultSearchProviders()
     },
     pricing: {},
   };
