@@ -44,7 +44,8 @@ export async function handleInternalApiRequest(request, params = {}) {
     }
 
     const url = new URL(request.url);
-    const body = request.method === "POST" ? await readJsonBody(request) : null;
+    const bodyRequest = request.method === "POST" ? request.clone() : request;
+    const body = request.method === "POST" ? await readJsonBody(bodyRequest) : null;
     const requestInfo = buildRequestInfo(request, url, body, auth.token, params);
 
     logInternalApi.request(requestInfo);
