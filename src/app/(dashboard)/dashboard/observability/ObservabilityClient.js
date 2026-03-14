@@ -1,20 +1,35 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { Button, Card, Input, Select } from "@/shared/components";
-
-const statusOptions = [
-  { value: "", label: "All status" },
-  { value: "start", label: "start" },
-  { value: "ok", label: "ok" },
-  { value: "error", label: "error" },
-];
+import { Button, Card, Input } from "@/shared/components";
 
 const viewOptions = [
   { value: "list", label: "List" },
   { value: "timeline", label: "Timeline" },
   { value: "trace", label: "Request Trace" },
 ];
+
+const filterFieldLabels = {
+  status: "Status",
+  component: "Component",
+  source: "Source",
+  event: "Event",
+  session_id: "Session ID",
+  trace_id: "Trace ID",
+  request_id: "Request ID",
+  route_id: "Route ID",
+  tool_call_id: "Tool Call ID",
+  tool_method: "Tool Method",
+  model: "Model",
+  provider: "Provider",
+};
+
+function getEventDisplayName(evt) {
+  if (evt?.event?.startsWith("tool.call") && evt?.tool?.method) {
+    return `${evt.event}.${evt.tool.method}`;
+  }
+  return evt?.event || "-";
+}
 
 function formatJson(value) {
   try {
@@ -47,12 +62,15 @@ export default function ObservabilityClient() {
     request_id: "",
     route_id: "",
     tool_call_id: "",
+    tool_method: "",
+    model: "",
+    provider: "",
     limit: "200",
   });
   const [viewMode, setViewMode] = useState("list");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [data, setData] = useState({ events: [], summary: {}, files: [] });
+  const [data, setData] = useState({ events: [], summary: {}, files: [], facets: {} });
   const [selectedIdx, setSelectedIdx] = useState(-1);
 
   const queryString = useMemo(() => {
@@ -115,27 +133,44 @@ export default function ObservabilityClient() {
       request_id: "",
       route_id: "",
       tool_call_id: "",
+      tool_method: "",
+      model: "",
+      provider: "",
       limit: "200",
     });
   };
 
+  const facetKeys = useMemo(() => Object.keys(filterFieldLabels), []);
+
+  const getListId = (field) => `observability-filter-${field}`;
+
+  const renderFilterInput = (field) => (
+    <Input
+      key={field}
+      label={filterFieldLabels[field]}
+      placeholder={`Filter ${filterFieldLabels[field].toLowerCase()}`}
+      value={filters[field]}
+      onChange={applyField(field)}
+      list={getListId(field)}
+    />
+  );
+
   return (
     <div className="flex flex-col gap-4">
       <Card title="Observability Logs" subtitle="Filter, trace and inspect captured request/tool events" icon="monitoring">
-        <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-3">
           <Input label="Day" type="date" value={filters.day} onChange={applyField("day")} />
-          <Input label="Search" placeholder="timeout, tool.call.error..." value={filters.q} onChange={applyField("q")} />
-          <Select label="Status" value={filters.status} onChange={applyField("status")} options={statusOptions} placeholder="All status" />
-          <Input label="Component" placeholder="api.internal" value={filters.component} onChange={applyField("component")} />
-          <Input label="Source" placeholder="route/upstream" value={filters.source} onChange={applyField("source")} />
-          <Input label="Event" placeholder="request.responded" value={filters.event} onChange={applyField("event")} />
-          <Input label="Session ID" placeholder="sess_..." value={filters.session_id} onChange={applyField("session_id")} />
-          <Input label="Trace ID" placeholder="tr_..." value={filters.trace_id} onChange={applyField("trace_id")} />
-          <Input label="Request ID" placeholder="req_..." value={filters.request_id} onChange={applyField("request_id")} />
-          <Input label="Route ID" placeholder="api.v1.chat.completions" value={filters.route_id} onChange={applyField("route_id")} />
-          <Input label="Tool Call ID" placeholder="tool_..." value={filters.tool_call_id} onChange={applyField("tool_call_id")} />
+          <Input label="Keyword" placeholder="Any keyword in payload/meta/tool/model" value={filters.q} onChange={applyField("q")} />
+          {facetKeys.map(renderFilterInput)}
           <Input label="Limit" type="number" min="1" max="500" value={filters.limit} onChange={applyField("limit")} />
         </div>
+        {facetKeys.map((field) => (
+          <datalist key={`list-${field}`} id={getListId(field)}>
+            {(data.facets?.[field] || []).map((value) => (
+              <option key={`${field}-${value}`} value={value} />
+            ))}
+          </datalist>
+        ))}
         <div className="flex flex-wrap gap-2 mt-4">
           <Button variant="primary" icon="filter_alt" onClick={fetchData} loading={loading}>Apply</Button>
           <Button variant="outline" icon="refresh" onClick={fetchData} loading={loading}>Refresh</Button>
@@ -201,7 +236,7 @@ export default function ObservabilityClient() {
                     <div className="font-mono text-xs">{evt.timestamp}</div>
                     <div className="text-xs px-2 py-0.5 rounded bg-black/5 dark:bg-white/10">{evt.status}</div>
                   </div>
-                  <div className="mt-2 font-mono text-sm">{evt.event}</div>
+                  <div className="mt-2 font-mono text-sm">{getEventDisplayName(evt)}</div>
                   <div className="text-xs text-text-muted mt-1">{evt.component} · {evt.source}</div>
                 </button>
               ))}
@@ -224,7 +259,7 @@ export default function ObservabilityClient() {
                           onClick={() => setSelectedIdx(idx)}
                           className={`w-full text-left px-3 py-2 rounded-lg text-sm ${selectedIdx === idx ? "bg-primary-500/10" : "bg-black/[0.02] dark:bg-white/[0.02]"}`}
                         >
-                          <div className="font-mono">{evt.event}</div>
+                          <div className="font-mono">{getEventDisplayName(evt)}</div>
                           <div className="text-xs text-text-muted">{evt.timestamp}</div>
                         </button>
                       );
@@ -241,9 +276,7 @@ export default function ObservabilityClient() {
                     <th className="text-left p-3">Time</th>
                     <th className="text-left p-3">Event</th>
                     <th className="text-left p-3">Status</th>
-                    <th className="text-left p-3">Component</th>
-                    <th className="text-left p-3">Request ID</th>
-                    <th className="text-left p-3">Trace ID</th>
+                    <th className="text-left p-3">Request</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -254,11 +287,9 @@ export default function ObservabilityClient() {
                         onClick={() => setSelectedIdx(idx)}
                       >
                         <td className="p-3 whitespace-nowrap">{evt.timestamp}</td>
-                        <td className="p-3 font-mono">{evt.event}</td>
+                        <td className="p-3 font-mono">{getEventDisplayName(evt)}</td>
                         <td className="p-3">{evt.status}</td>
-                        <td className="p-3">{evt.component}</td>
-                        <td className="p-3 font-mono">{evt.request_id || "-"}</td>
-                        <td className="p-3 font-mono">{evt.trace_id || "-"}</td>
+                        <td className="p-3 font-mono text-xs">{evt.request_id || evt.trace_id || "-"}</td>
                       </tr>
                     </Fragment>
                   ))}
@@ -268,13 +299,13 @@ export default function ObservabilityClient() {
           )}
         </Card>
 
-        <Card title="Event Detail" icon="plagiarism" className="overflow-hidden">
+        <Card title="Event Detail" icon="plagiarism" className="overflow-hidden h-fit xl:sticky xl:top-4 self-start">
           {!selectedEvent ? (
             <div className="text-sm text-text-muted">Select an event to inspect full payload.</div>
           ) : (
             <div className="space-y-3">
               <div className="text-xs text-text-muted">{selectedEvent.timestamp}</div>
-              <div className="font-mono text-sm break-all">{selectedEvent.event}</div>
+              <div className="font-mono text-sm break-all">{getEventDisplayName(selectedEvent)}</div>
               <div className="grid grid-cols-1 gap-2 text-xs">
                 <div><b>request_id:</b> <span className="font-mono">{selectedEvent.request_id || "-"}</span></div>
                 <div><b>trace_id:</b> <span className="font-mono">{selectedEvent.trace_id || "-"}</span></div>
