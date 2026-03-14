@@ -1,7 +1,7 @@
 import { resolveCorrelation, createSpanContext, childSpan } from "@/lib/ampObservability/session";
 import { getCorrelationHeaders } from "@/lib/ampObservability/schema";
 import { normalizeError, resolveDurationMs } from "@/lib/ampObservability/helpers";
-import { writeEvent, flushAll, ensureFlushHooks, getSessionLogPath } from "@/lib/ampObservability/writer";
+import { writeEvent, flushAll, ensureFlushHooks, getSessionLogPath, runMaintenance } from "@/lib/ampObservability/writer";
 
 export {
   resolveCorrelation,
@@ -51,4 +51,8 @@ export function buildTiming(startTimeMs, extra = {}) {
 
 export async function flushObservability() {
   return flushAll();
+}
+
+export async function runObservabilityMaintenance() {
+  return runMaintenance();
 }
