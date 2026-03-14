@@ -207,6 +207,36 @@ sequenceDiagram
     Stream->>Usage: extract usage + persist history/log
 ```
 
+## Observability Data-Flow Wireframe (Request Lineage)
+
+```mermaid
+flowchart TD
+    A[Ingress /v1 or /api/internal] --> B[Route handler]
+    B --> C[request.received]
+    C --> D[auth guard and settings]
+    D --> E[input normalization and translation]
+    E --> F[model resolve and routing]
+    F --> G[tool or provider execution]
+    G --> H{success}
+    H -->|yes| I[response transform]
+    I --> J{stream}
+    J -->|yes| K[stream.chunk*]
+    K --> L[request.responded]
+    J -->|no| L
+    H -->|no| M[fallback retry]
+    M --> G
+    M --> N[request.failed]
+    L --> O[(logs/amp-sessions jsonl)]
+    N --> O
+```
+
+Node mapping:
+
+- Request lifecycle wrapper: `src/lib/ampObservability/http.js`
+- Chat/responses/messages stream events: `src/app/api/v1/chat/completions/route.js`, `src/app/api/v1/responses/route.js`, `src/app/api/v1/messages/route.js`
+- Internal tool lifecycle: `src/lib/internalApi/handler.js`, `src/lib/internalApi/proxyToUpstream.js`
+- Event storage/query: `src/lib/ampObservability/writer.js`, `src/lib/ampObservability/reader.js`, `src/app/api/observability/route.js`
+
 ## Combo + Account Fallback Flow
 
 ```mermaid
