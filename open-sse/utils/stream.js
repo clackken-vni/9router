@@ -3,7 +3,9 @@ import { FORMATS } from "../translator/formats.js";
 import { trackPendingRequest, appendRequestLog } from "@/lib/usageDb.js";
 import { extractUsage, hasValidUsage, estimateUsage, logUsage, addBufferToUsage, filterUsageForFormat, COLORS } from "./usageTracking.js";
 import { parseSSELine, hasValuableContent, fixInvalidId, formatSSE } from "./streamHelpers.js";
-import { serializeEvent, drainEvents } from "../services/streamIntervention.js";
+import { serializeEvent, drainEvents, queueEvent, STREAM_INTERVENTION_EVENT_TYPES } from "../services/streamIntervention.js";
+import { resolveToolInterceptionPolicy, interceptToolCalls } from "../services/toolInterception.js";
+import { getCompleteToolCalls } from "../translator/helpers/toolCallHelper.js";
 
 export { COLORS, formatSSE };
 
@@ -52,6 +54,8 @@ export function createSSEStream(options = {}) {
   let usage = null;
 
   const state = mode === STREAM_MODE.TRANSLATE ? { ...initState(sourceFormat), provider, toolNameMap, model } : null;
+  const interceptionPolicy = resolveToolInterceptionPolicy(body);
+  const interceptedToolCallIds = new Set();
 
   let totalContentLength = 0;
   let accumulatedContent = "";
@@ -107,8 +111,34 @@ export function createSSEStream(options = {}) {
     }
   };
 
+  const processToolInterception = async (controller, finishReason = null) => {
+    if (!interventionState || !interceptionPolicy.enabled) return;
+    if (finishReason && finishReason !== "tool_calls") return;
+
+    const completeToolCalls = getCompleteToolCalls(getToolCalls())
+      .filter((tc) => !interceptedToolCallIds.has(tc.id));
+    if (!completeToolCalls.length) return;
+
+    await interceptToolCalls({
+      toolCalls: completeToolCalls,
+      policy: interceptionPolicy,
+      queueEvent: (eventInput) => queueEvent(interventionState, eventInput),
+      context: {
+        provider,
+        model,
+        attempt: interventionState.context?.attempt || 1
+      }
+    });
+
+    for (const tc of completeToolCalls) {
+      interceptedToolCallIds.add(tc.id);
+    }
+
+    enqueueInterventionEvents(controller);
+  };
+
   return new TransformStream({
-    transform(chunk, controller) {
+    async transform(chunk, controller) {
       if (!ttftAt) {
         ttftAt = Date.now();
       }
@@ -181,6 +211,9 @@ export function createSSEStream(options = {}) {
               }
 
               const isFinishChunk = parsed.choices?.[0]?.finish_reason;
+              if (isFinishChunk) {
+                await processToolInterception(controller, isFinishChunk);
+              }
               if (isFinishChunk && !hasValidUsage(parsed.usage)) {
                 const estimated = estimateUsage(body, totalContentLength, FORMATS.OPENAI);
                 parsed.usage = filterUsageForFormat(estimated, FORMATS.OPENAI);
@@ -292,6 +325,10 @@ export function createSSEStream(options = {}) {
 
             // Inject estimated usage if finish chunk has no valid usage
             const isFinishChunk = item.type === "message_delta" || item.choices?.[0]?.finish_reason;
+            const finishReason = item.choices?.[0]?.finish_reason || (item.type === "message_delta" ? state.finishReason : null);
+            if (isFinishChunk) {
+              await processToolInterception(controller, finishReason);
+            }
             if (state.finishReason && isFinishChunk && !hasValidUsage(item.usage) && totalContentLength > 0) {
               const estimated = estimateUsage(body, totalContentLength, sourceFormat);
               item.usage = filterUsageForFormat(estimated, sourceFormat); // Filter + already has buffer
@@ -310,12 +347,14 @@ export function createSSEStream(options = {}) {
       }
     },
 
-    flush(controller) {
+    async flush(controller) {
       trackPendingRequest(model, provider, connectionId, false);
       enqueueInterventionEvents(controller);
       try {
         const remaining = sharedDecoder.decode();
         if (remaining) buffer += remaining;
+
+        await processToolInterception(controller, state?.finishReason || null);
 
         if (mode === STREAM_MODE.PASSTHROUGH) {
           if (buffer) {
