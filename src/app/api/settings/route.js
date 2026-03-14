@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { getSettings, updateSettings, getApiKeys } from "@/lib/localDb";
-import { ensureSettingsLoaded } from "@/lib/settingsCache";
 import { applyOutboundProxyEnv } from "@/lib/network/outboundProxy";
 import { redactSearchProviders, sanitizeSearchProviders } from "@/lib/searchProvidersSettings";
 import bcrypt from "bcryptjs";
@@ -126,15 +125,11 @@ export async function GET(request) {
     
     const enableRequestLogs = process.env.ENABLE_REQUEST_LOGS === "true";
     const enableTranslator = process.env.ENABLE_TRANSLATOR === "true";
-    const ampSessionLogsEnabled = settings.ampSessionLogsEnabled !== false;
-    const internalApiLogsEnabled = settings.internalApiLogsEnabled !== false;
     
     return NextResponse.json({ 
       ...redactedSettings, 
       enableRequestLogs,
       enableTranslator,
-      ampSessionLogsEnabled,
-      internalApiLogsEnabled,
       hasPassword: !!password
     });
   } catch (error) {
@@ -146,10 +141,6 @@ export async function GET(request) {
 export async function PATCH(request) {
   try {
     const body = await request.json();
-
-    if (Object.prototype.hasOwnProperty.call(body, "ampSessionLogsEnabled") || Object.prototype.hasOwnProperty.call(body, "internalApiLogsEnabled")) {
-      await ensureSettingsLoaded().catch(() => {});
-    }
 
     // If updating password, hash it
     if (body.newPassword) {
