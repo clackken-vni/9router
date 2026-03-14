@@ -352,6 +352,7 @@ export function createSSEStream(options = {}) {
               thinking: accumulatedThinking,
               toolCalls: getToolCalls()
             }, usage, ttftAt);
+            enqueueInterventionEvents(controller);
           }
           return;
         }
@@ -417,6 +418,7 @@ export function createSSEStream(options = {}) {
             content: accumulatedContent,
             thinking: accumulatedThinking
           }, state?.usage, ttftAt);
+          enqueueInterventionEvents(controller);
         }
       } catch (error) {
         console.log("Error in flush:", error);

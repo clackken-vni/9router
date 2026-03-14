@@ -4,7 +4,7 @@ import { createSSETransformStreamWithLogger, createPassthroughStreamWithLogger }
 import { pipeWithDisconnect } from "../../utils/streamHandler.js";
 import { buildRequestDetail, extractRequestConfig, saveUsageStats } from "./requestDetail.js";
 import { saveRequestDetail } from "@/lib/usageDb.js";
-import { createState, queueEvent, STREAM_INTERVENTION_EVENT_TYPES } from "../../services/streamIntervention.js";
+import { createState, queueEvent, markTerminal, STREAM_INTERVENTION_EVENT_TYPES } from "../../services/streamIntervention.js";
 
 const SSE_HEADERS = {
   "Content-Type": "text/event-stream",
@@ -53,7 +53,21 @@ export function handleStreamingResponse({ providerResponse, provider, model, sou
     }
   });
 
-  const transformStream = buildTransformStream({ provider, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, model, connectionId, body, onStreamComplete, apiKey, interventionState });
+  const wrappedOnStreamComplete = (contentObj, usage, ttftAt) => {
+    markTerminal(interventionState, {
+      type: STREAM_INTERVENTION_EVENT_TYPES.STATUS,
+      phase: "stream.done",
+      provider,
+      model,
+      attempt: interventionState.context?.attempt || 1,
+      data: {
+        provider_attempts: interventionState.context?.provider_attempts || []
+      }
+    });
+    onStreamComplete?.(contentObj, usage, ttftAt);
+  };
+
+  const transformStream = buildTransformStream({ provider, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, model, connectionId, body, onStreamComplete: wrappedOnStreamComplete, apiKey, interventionState });
   const transformedBody = pipeWithDisconnect(providerResponse, transformStream, streamController);
 
   const streamDetailId = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
