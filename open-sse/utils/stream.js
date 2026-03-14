@@ -65,6 +65,7 @@ export function createSSEStream(options = {}) {
   let hasStreamErrorEvent = false;
   let hasSeenSSEData = false; // Track if we've seen valid SSE data events
   const accumulatedToolCalls = new Map();
+  let pendingNamedEvent = null;
 
   const mergeToolCalls = (toolCalls) => {
     if (!Array.isArray(toolCalls)) return;
@@ -196,6 +197,33 @@ export function createSSEStream(options = {}) {
         for (const line of lines) {
         const trimmed = line.trim();
         enqueueInterventionEvents(controller);
+
+        if (trimmed.startsWith("event:")) {
+          pendingNamedEvent = trimmed.slice(6).trim();
+          if (mode === STREAM_MODE.PASSTHROUGH) {
+            const output = line + "\n";
+            reqLogger?.appendConvertedChunk?.(output);
+            controller.enqueue(sharedEncoder.encode(output));
+          }
+          continue;
+        }
+
+        if (pendingNamedEvent && pendingNamedEvent.startsWith("amp.") && trimmed.startsWith("data:")) {
+          try {
+            const payload = JSON.parse(trimmed.slice(5).trim());
+            if (payload && typeof payload === "object") {
+              payload.type = pendingNamedEvent;
+              const output = serializeEvent(payload);
+              if (output) {
+                reqLogger?.appendConvertedChunk?.(output);
+                controller.enqueue(sharedEncoder.encode(output));
+              }
+              pendingNamedEvent = null;
+              continue;
+            }
+          } catch { }
+          pendingNamedEvent = null;
+        }
 
         // Passthrough mode: normalize and forward
         if (mode === STREAM_MODE.PASSTHROUGH) {
