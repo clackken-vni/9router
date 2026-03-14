@@ -3,7 +3,7 @@ import { FORMATS } from "../translator/formats.js";
 import { trackPendingRequest, appendRequestLog } from "@/lib/usageDb.js";
 import { extractUsage, hasValidUsage, estimateUsage, logUsage, addBufferToUsage, filterUsageForFormat, COLORS } from "./usageTracking.js";
 import { parseSSELine, hasValuableContent, fixInvalidId, formatSSE } from "./streamHelpers.js";
-import { serializeEvent, drainEvents, queueEvent, STREAM_INTERVENTION_EVENT_TYPES } from "../services/streamIntervention.js";
+import { serializeEvent, drainEvents, queueEvent, markTerminal, STREAM_INTERVENTION_EVENT_TYPES } from "../services/streamIntervention.js";
 import { resolveToolInterceptionPolicy, interceptToolCalls } from "../services/toolInterception.js";
 import { getCompleteToolCalls } from "../translator/helpers/toolCallHelper.js";
 
@@ -61,6 +61,8 @@ export function createSSEStream(options = {}) {
   let accumulatedContent = "";
   let accumulatedThinking = "";
   let ttftAt = null;
+  let hasSentDoneMarker = false;
+  let hasStreamErrorEvent = false;
   let hasSeenSSEData = false; // Track if we've seen valid SSE data events
   const accumulatedToolCalls = new Map();
 
@@ -111,6 +113,47 @@ export function createSSEStream(options = {}) {
     }
   };
 
+  const emitDoneMarker = (controller) => {
+    if (hasSentDoneMarker) return;
+
+    if (sourceFormat !== FORMATS.OPENAI_RESPONSES) {
+      const doneOutput = "data: [DONE]\n\n";
+      reqLogger?.appendConvertedChunk?.(doneOutput);
+      controller.enqueue(sharedEncoder.encode(doneOutput));
+    }
+
+    hasSentDoneMarker = true;
+  };
+
+  const emitStreamError = (controller, error) => {
+    if (!interventionState || hasStreamErrorEvent) return;
+
+    queueEvent(interventionState, {
+      type: STREAM_INTERVENTION_EVENT_TYPES.ERROR,
+      phase: "stream.error",
+      provider,
+      model,
+      attempt: interventionState.context?.attempt || 1,
+      data: {
+        message: error?.message || "stream_transform_error"
+      }
+    });
+
+    markTerminal(interventionState, {
+      type: STREAM_INTERVENTION_EVENT_TYPES.STATUS,
+      phase: "stream.done",
+      provider,
+      model,
+      attempt: interventionState.context?.attempt || 1,
+      data: {
+        provider_attempts: interventionState.context?.provider_attempts || []
+      }
+    });
+
+    hasStreamErrorEvent = true;
+    enqueueInterventionEvents(controller);
+  };
+
   const processToolInterception = async (controller, finishReason = null) => {
     if (!interventionState || !interceptionPolicy.enabled) return;
     if (finishReason && finishReason !== "tool_calls") return;
@@ -139,17 +182,18 @@ export function createSSEStream(options = {}) {
 
   return new TransformStream({
     async transform(chunk, controller) {
-      if (!ttftAt) {
-        ttftAt = Date.now();
-      }
-      const text = sharedDecoder.decode(chunk, { stream: true });
-      buffer += text;
-      reqLogger?.appendProviderChunk?.(text);
+      try {
+        if (!ttftAt) {
+          ttftAt = Date.now();
+        }
+        const text = sharedDecoder.decode(chunk, { stream: true });
+        buffer += text;
+        reqLogger?.appendProviderChunk?.(text);
 
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
 
-      for (const line of lines) {
+        for (const line of lines) {
         const trimmed = line.trim();
         enqueueInterventionEvents(controller);
 
@@ -253,11 +297,7 @@ export function createSSEStream(options = {}) {
 
         if (parsed && parsed.done) {
           // Responses API SSE does not use [DONE] sentinel — stream ends after response.completed
-          if (sourceFormat !== FORMATS.OPENAI_RESPONSES) {
-            const output = "data: [DONE]\n\n";
-            reqLogger?.appendConvertedChunk?.(output);
-            controller.enqueue(sharedEncoder.encode(output));
-          }
+          emitDoneMarker(controller);
           continue;
         }
 
@@ -345,6 +385,10 @@ export function createSSEStream(options = {}) {
           }
         }
       }
+      } catch (error) {
+        emitStreamError(controller, error);
+        emitDoneMarker(controller);
+      }
     },
 
     async flush(controller) {
@@ -380,9 +424,7 @@ export function createSSEStream(options = {}) {
           // This prevents mixing JSON responses with SSE terminators.
           // Some clients (e.g. OpenClaw) expect the OpenAI-style sentinel for true SSE streams.
           if (hasSeenSSEData) {
-            const doneOutput = "data: [DONE]\n\n";
-            reqLogger?.appendConvertedChunk?.(doneOutput);
-            controller.enqueue(sharedEncoder.encode(doneOutput));
+            emitDoneMarker(controller);
           }
 
           if (onStreamComplete) {
@@ -436,11 +478,7 @@ export function createSSEStream(options = {}) {
         }
 
         // Responses API SSE does not use [DONE] sentinel — stream ends after response.completed
-        if (sourceFormat !== FORMATS.OPENAI_RESPONSES) {
-          const doneOutput = "data: [DONE]\n\n";
-          reqLogger?.appendConvertedChunk?.(doneOutput);
-          controller.enqueue(sharedEncoder.encode(doneOutput));
-        }
+        emitDoneMarker(controller);
 
         if (!hasValidUsage(state?.usage) && totalContentLength > 0) {
           state.usage = estimateUsage(body, totalContentLength, sourceFormat);
@@ -460,7 +498,8 @@ export function createSSEStream(options = {}) {
           enqueueInterventionEvents(controller);
         }
       } catch (error) {
-        console.log("Error in flush:", error);
+        emitStreamError(controller, error);
+        emitDoneMarker(controller);
       }
     }
   });
