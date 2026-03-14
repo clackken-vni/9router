@@ -70,6 +70,7 @@ export async function handleWebSearch2(request, context) {
         headers: {
           "cache-control": "no-store",
           "x-9router-search-provider": providerType,
+          "x-9router-search-source": "local-handler",
         },
       });
     } catch (error) {

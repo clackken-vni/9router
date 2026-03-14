@@ -21,6 +21,27 @@ export function deriveInternalMethod(url, body) {
   return null;
 }
 
+function getForwardableHeaders(request) {
+  const allowlist = [
+    "accept",
+    "content-type",
+    "user-agent",
+    "x-client",
+    "x-amp-version",
+    "x-9router-session-id",
+    "x-9router-trace-id",
+    "x-9router-span-id",
+    "x-9router-parent-span-id",
+  ];
+
+  const out = {};
+  for (const name of allowlist) {
+    const value = request?.headers?.get(name);
+    if (value) out[name] = value;
+  }
+  return out;
+}
+
 export function buildRequestInfo(request, url, body, token, params = {}) {
   const userAgent = request?.headers?.get("user-agent") || "(none)";
   const xClient = request?.headers?.get("x-client") || "(none)";
@@ -61,5 +82,6 @@ export function buildRequestInfo(request, url, body, token, params = {}) {
     xAmp,
     tokenType,
     tokenPreview: token?.substring(0, 20) + "...",
+    forwardableHeaders: getForwardableHeaders(request),
   };
 }
