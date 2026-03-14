@@ -1,6 +1,6 @@
 import crypto from "crypto";
 
-const DEFAULT_SENSITIVE_KEY_RE = /(authorization|api[-_]?key|token|cookie|password|secret|set-cookie|client_secret|refresh_token)/i;
+const DEFAULT_SENSITIVE_KEY_RE = /(authorization|api[-_]?key|token|cookie|password|secret|set-cookie|client_secret|refresh_token|access_key|private_key|credential|bearer|proxy[-_]?authorization)/i;
 
 function hashValue(value) {
   return crypto.createHash("sha256").update(String(value)).digest("hex");

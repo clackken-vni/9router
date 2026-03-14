@@ -15,6 +15,9 @@ export async function GET(request) {
       event: url.searchParams.get("event") || "",
       session_id: url.searchParams.get("session_id") || "",
       trace_id: url.searchParams.get("trace_id") || "",
+      request_id: url.searchParams.get("request_id") || "",
+      route_id: url.searchParams.get("route_id") || "",
+      tool_call_id: url.searchParams.get("tool_call_id") || "",
       limit: url.searchParams.get("limit") || "100",
     });
     return NextResponse.json(data);

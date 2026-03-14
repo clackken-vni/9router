@@ -5,6 +5,9 @@ export const CORRELATION_HEADERS = {
   traceId: "x-9router-trace-id",
   spanId: "x-9router-span-id",
   parentSpanId: "x-9router-parent-span-id",
+  requestId: "x-9router-request-id",
+  routeId: "x-9router-route-id",
+  toolCallId: "x-9router-tool-call-id",
 };
 
 export function newId(prefix = "") {
@@ -60,3 +63,38 @@ export function readHeader(headersLike, key) {
   if (typeof headersLike.get === "function") return headersLike.get(key);
   return headersLike[key] || headersLike[key.toLowerCase()] || null;
 }
+
+export function pickCorrelationFields(context = {}) {
+  return {
+    session_id: context.session_id,
+    trace_id: context.trace_id,
+    span_id: context.span_id,
+    parent_span_id: context.parent_span_id,
+    request_id: context.request_id,
+    route_id: context.route_id,
+    tool_call_id: context.tool_call_id,
+  };
+}
+
+export function summarizeHeaders(headersLike) {
+  if (!headersLike) return {};
+  const out = {};
+  const pushEntry = (name, value) => {
+    const key = String(name || "").toLowerCase();
+    if (!key) return;
+    out[key] = value;
+  };
+
+  if (typeof headersLike.entries === "function") {
+    for (const [name, value] of headersLike.entries()) {
+      pushEntry(name, value);
+    }
+    return out;
+  }
+
+  for (const [name, value] of Object.entries(headersLike || {})) {
+    pushEntry(name, value);
+  }
+  return out;
+}
+
