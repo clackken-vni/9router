@@ -4,6 +4,47 @@ import { applyOutboundProxyEnv } from "@/lib/network/outboundProxy";
 import { redactSearchProviders, sanitizeSearchProviders } from "@/lib/searchProvidersSettings";
 import bcrypt from "bcryptjs";
 
+function mergeSearchProviderApiKeys(nextSearchProviders, currentSearchProviders) {
+  if (!nextSearchProviders || typeof nextSearchProviders !== "object" || Array.isArray(nextSearchProviders)) {
+    return nextSearchProviders;
+  }
+
+  const currentProviders = Array.isArray(currentSearchProviders?.providers) ? currentSearchProviders.providers : [];
+  const apiKeyByProviderKey = new Map(
+    currentProviders.map((provider) => [
+      `${provider?.id || ""}::${provider?.type || ""}`,
+      typeof provider?.apiKey === "string" ? provider.apiKey : "",
+    ])
+  );
+
+  const providers = Array.isArray(nextSearchProviders.providers)
+    ? nextSearchProviders.providers.map((provider) => {
+      if (!provider || typeof provider !== "object" || Array.isArray(provider)) {
+        return provider;
+      }
+      if (typeof provider.apiKey !== "string" || provider.apiKey.trim() !== "") {
+        return provider;
+      }
+
+      const providerKey = `${provider.id || ""}::${provider.type || ""}`;
+      const existingApiKey = apiKeyByProviderKey.get(providerKey);
+      if (!existingApiKey) {
+        return provider;
+      }
+
+      return {
+        ...provider,
+        apiKey: existingApiKey,
+      };
+    })
+    : nextSearchProviders.providers;
+
+  return {
+    ...nextSearchProviders,
+    providers,
+  };
+}
+
 /**
  * Amp CLI Settings API
  * 
@@ -132,6 +173,8 @@ export async function PATCH(request) {
     if (body.searchProviders !== undefined) {
       try {
         body.searchProviders = sanitizeSearchProviders(body.searchProviders);
+        const currentSettings = await getSettings();
+        body.searchProviders = mergeSearchProviderApiKeys(body.searchProviders, currentSettings?.searchProviders);
       } catch (validationError) {
         return NextResponse.json({ error: validationError.message }, { status: 400 });
       }
