@@ -550,6 +550,23 @@ Runtime visibility sources:
 - optional deep request/translation logs under `logs/` when `ENABLE_REQUEST_LOGS=true`
 - dashboard usage endpoints (`/api/usage/*`) for UI consumption
 
+### Observability Verification Matrix
+
+| Scenario | Expected chain | Verification target |
+|---|---|---|
+| Compatibility non-stream request | `request.received` → `request.responded` | `/v1`, `/v1/models`, `/v1/messages/count_tokens` |
+| Compatibility stream request | `request.received` → `stream.chunk*` → `request.responded` | `/v1/chat/completions`, `/v1/responses`, `/v1/messages` |
+| Internal tool lifecycle | `request.received` + `tool.call.start/forwarded/result/end` | `/api/internal/[...path]` + upstream/local handler |
+| Error path continuity | `request.failed` + normalized `error` | invalid payload, auth fail, upstream timeout |
+| Correlation continuity | same `request_id` + `trace_id` through same flow | observability query by IDs |
+| Redaction compliance | no raw secret/token in persisted event payloads | sample events in `logs/amp-sessions` |
+
+Pass criteria:
+- Completeness: mỗi flow có event bắt đầu/kết thúc (hoặc failed).
+- Continuity: `request_id` + `trace_id` nhất quán trong cùng trace.
+- Safety: payload nhạy cảm bị mask/truncate theo policy.
+- Operability: query API lọc được theo `request_id`, `route_id`, `tool_call_id`.
+
 ## Security-Sensitive Boundaries
 
 - JWT secret (`JWT_SECRET`) secures dashboard session cookie verification/signing
