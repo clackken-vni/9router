@@ -1,11 +1,21 @@
 import { handleChat } from "@/sse/handlers/chat.js";
+import {
+  buildTiming,
+  createSpanContext,
+  emitLifecycleEnd,
+  emitLifecycleError,
+  emitLifecycleStart,
+  emitRequestStreamChunk,
+  endRequestLifecycle,
+  failRequestLifecycle,
+  getCorrelationHeaders,
+  startRequestLifecycle,
+} from "@/lib/ampObservability";
 import { initTranslators } from "open-sse/translator/index.js";
 
+const ROUTE_ID = "api.v1.messages";
 let initialized = false;
 
-/**
- * Initialize translators once
- */
 async function ensureInitialized() {
   if (!initialized) {
     await initTranslators();
@@ -14,70 +24,121 @@ async function ensureInitialized() {
   }
 }
 
-/**
- * Handle CORS preflight
- */
+function wrapStreamResponse(response, streamContext, requestContext, requestStartMs) {
+  if (!response?.body) return response;
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("text/event-stream")) return response;
+
+  let chunkCount = 0;
+  let streamedBytes = 0;
+
+  const transformer = new TransformStream({
+    async transform(chunk, controller) {
+      const bytes = chunk?.byteLength || 0;
+      chunkCount += 1;
+      streamedBytes += bytes;
+      await emitRequestStreamChunk(streamContext, bytes, chunkCount);
+      controller.enqueue(chunk);
+    },
+    async flush() {
+      await emitLifecycleEnd(streamContext, {
+        event: "model.response.end",
+        component: ROUTE_ID,
+        source: "route",
+        timing: buildTiming(requestStartMs, { stream: true, streamed_bytes: streamedBytes, chunk_count: chunkCount }),
+      });
+      await endRequestLifecycle(requestContext, response, {
+        method: "POST",
+        path: "/v1/messages",
+        startTime: requestStartMs,
+        io: { output: { stream: true, streamed_bytes: streamedBytes, chunk_count: chunkCount } },
+      });
+    },
+  });
+
+  return new Response(response.body.pipeThrough(transformer), {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 export async function OPTIONS() {
   return new Response(null, {
     headers: {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "*"
-    }
+      "Access-Control-Allow-Headers": "*",
+    },
   });
 }
 
-/**
- * POST /v1/messages - Claude format (auto convert via handleChat)
- */
 export async function POST(request) {
-  await ensureInitialized();
-  const isInternalProxy = request.headers.get("x-internal-proxy") === "true";
+  const requestFlow = await startRequestLifecycle(request, ROUTE_ID);
+  const startMs = requestFlow.startTime;
+  const body = requestFlow.body || {};
+  const requestContext = requestFlow.requestContext;
+  const modelContext = createSpanContext(requestContext, { tool_call_id: "tool_handle_chat_messages" });
 
-  // Debug: Log incoming request for Librarian
   try {
-    const clonedRequest = request.clone();
-    const body = await clonedRequest.json();
-    const model = body?.model || "unknown";
-    
-    // Check if this is a Librarian-related request
-    const isLibrarian = 
-      model.includes("sonnet") || 
-      model.includes("librarian") ||
-      String(body?.system || "").toLowerCase().includes("librarian") ||
-      String(body?.metadata?.agent || "").includes("librarian");
+    await ensureInitialized();
 
-    if (isLibrarian) {
-      const headers = {};
-      for (const [key, value] of request.headers.entries()) {
-        if (key.toLowerCase().includes("auth") || key.toLowerCase().includes("api-key")) {
-          headers[key] = value ? String(value).slice(0, 20) + "..." : "(empty)";
-        } else {
-          headers[key] = value;
-        }
-      }
+    await emitLifecycleStart(modelContext, {
+      event: "model.request.start",
+      component: ROUTE_ID,
+      source: "route",
+      model: { raw: body?.model || "unknown" },
+      io: {
+        input: {
+          body: {
+            stream: !!body?.stream,
+            message_count: body?.messages?.length || 0,
+            tool_count: body?.tools?.length || 0,
+          },
+        },
+      },
+    });
 
-      console.log("\n" + "=".repeat(80));
-      console.log("[LIBRARIAN DEBUG] /v1/messages");
-      console.log("=".repeat(80));
-      console.log("Model:", model);
-      console.log("Internal Proxy:", isInternalProxy);
-      console.log("Headers:", JSON.stringify(headers, null, 2));
-      
-      const bodyPreview = { ...body };
-      if (bodyPreview.messages?.length > 3) {
-        bodyPreview.messages = [...bodyPreview.messages.slice(0, 2), `... (${bodyPreview.messages.length - 2} more)`];
-      }
-      if (bodyPreview.tools?.length > 3) {
-        bodyPreview.tools = [...bodyPreview.tools.slice(0, 2), `... (${bodyPreview.tools.length - 2} more)`];
-      }
-      console.log("Body:", JSON.stringify(bodyPreview, null, 2).slice(0, 2000));
-      console.log("=".repeat(80) + "\n");
+    const downstreamHeaders = new Headers(request.headers);
+    for (const [key, value] of Object.entries(getCorrelationHeaders(modelContext))) {
+      if (value) downstreamHeaders.set(key, String(value));
     }
-  } catch (e) {
-    // Ignore errors in debug logging
+
+    const downstreamRequest = new Request(request, { headers: downstreamHeaders });
+    const response = await handleChat(downstreamRequest);
+
+    if (body?.stream) {
+      return wrapStreamResponse(response, modelContext, requestContext, startMs);
+    }
+
+    await emitLifecycleEnd(modelContext, {
+      event: "model.response.end",
+      component: ROUTE_ID,
+      source: "route",
+      meta: { status_code: response.status },
+      timing: buildTiming(startMs, { stream: false }),
+    });
+
+    await endRequestLifecycle(requestContext, response, {
+      method: "POST",
+      path: "/v1/messages",
+      startTime: startMs,
+      io: { output: { stream: false, status_code: response.status } },
+    });
+
+    return response;
+  } catch (error) {
+    await emitLifecycleError(modelContext, error, {
+      event: "model.response.error",
+      component: ROUTE_ID,
+      source: "route",
+      timing: buildTiming(startMs),
+    });
+    await failRequestLifecycle(requestContext, error, {
+      method: "POST",
+      path: "/v1/messages",
+      startTime: startMs,
+    });
+    throw error;
   }
-
-  return await handleChat(request);
 }
-

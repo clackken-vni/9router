@@ -7,6 +7,12 @@ import {
   summarizeHeaders,
 } from "@/lib/ampObservability/helpers";
 import { writeEvent, flushAll, ensureFlushHooks, getSessionLogPath, runMaintenance } from "@/lib/ampObservability/writer";
+export {
+  startRequestLifecycle,
+  endRequestLifecycle,
+  failRequestLifecycle,
+  emitRequestStreamChunk,
+} from "@/lib/ampObservability/http";
 
 export {
   resolveCorrelation,
