@@ -5,8 +5,11 @@ import {
   emitLifecycleEnd,
   emitLifecycleError,
   emitLifecycleStart,
+  emitRequestStreamChunk,
+  endRequestLifecycle,
+  failRequestLifecycle,
   getCorrelationHeaders,
-  resolveCorrelation,
+  startRequestLifecycle,
 } from "@/lib/ampObservability";
 import { initTranslators } from "open-sse/translator/index.js";
 
@@ -31,17 +34,21 @@ function extractModelMeta(body = {}) {
   };
 }
 
-function wrapStreamResponse(response, streamContext, startMs) {
+function wrapStreamResponse(response, streamContext, requestContext, startMs) {
   if (!response?.body) return response;
   const contentType = response.headers.get("content-type") || "";
   if (!contentType.includes("text/event-stream")) return response;
 
+  let chunkCount = 0;
   const transformer = new TransformStream({
     start() {
       streamContext.streamed_bytes = 0;
     },
-    transform(chunk, controller) {
-      streamContext.streamed_bytes += chunk?.byteLength || 0;
+    async transform(chunk, controller) {
+      const size = chunk?.byteLength || 0;
+      streamContext.streamed_bytes += size;
+      chunkCount += 1;
+      await emitRequestStreamChunk(streamContext, size, chunkCount);
       controller.enqueue(chunk);
     },
     async flush() {
@@ -49,13 +56,19 @@ function wrapStreamResponse(response, streamContext, startMs) {
         event: "model.response.end",
         component: "api.v1.responses",
         source: "route",
-        timing: buildTiming(startMs, { stream: true, streamed_bytes: streamContext.streamed_bytes }),
+        timing: buildTiming(startMs, { stream: true, streamed_bytes: streamContext.streamed_bytes, chunk_count: chunkCount }),
       });
       await emitLifecycleEnd(createSpanContext(streamContext), {
         event: "session.end",
         component: "api.v1.responses",
         source: "route",
-        timing: buildTiming(startMs, { stream: true, streamed_bytes: streamContext.streamed_bytes }),
+        timing: buildTiming(startMs, { stream: true, streamed_bytes: streamContext.streamed_bytes, chunk_count: chunkCount }),
+      });
+      await endRequestLifecycle(requestContext, response, {
+        method: "POST",
+        path: "/v1/responses",
+        startTime: startMs,
+        io: { output: { stream: true, streamed_bytes: streamContext.streamed_bytes, chunk_count: chunkCount } },
       });
     },
   });
@@ -78,15 +91,13 @@ export async function OPTIONS() {
 }
 
 export async function POST(request) {
-  const startMs = Date.now();
-  let body = {};
-  try {
-    body = await request.clone().json();
-  } catch {}
+  const requestFlow = await startRequestLifecycle(request, "api.v1.responses");
+  const startMs = requestFlow.startTime;
+  const body = requestFlow.body || {};
 
-  const rootContext = resolveCorrelation(request.headers);
-  const sessionContext = createSpanContext(rootContext);
-  const modelContext = createSpanContext(rootContext);
+  const requestContext = requestFlow.requestContext;
+  const sessionContext = createSpanContext(requestContext);
+  const modelContext = createSpanContext(requestContext, { tool_call_id: "tool_handle_chat_responses" });
 
   await emitLifecycleStart(sessionContext, {
     event: "session.start",
@@ -129,7 +140,7 @@ export async function POST(request) {
     await ensureInitialized();
     const response = await handleChat(downstreamRequest);
 
-    if (body?.stream) return wrapStreamResponse(response, modelContext, startMs);
+    if (body?.stream) return wrapStreamResponse(response, modelContext, requestContext, startMs);
 
     await emitLifecycleEnd(modelContext, {
       event: "model.response.end",
@@ -147,6 +158,13 @@ export async function POST(request) {
       timing: buildTiming(startMs, { stream: false }),
     });
 
+    await endRequestLifecycle(requestContext, response, {
+      method: "POST",
+      path: "/v1/responses",
+      startTime: startMs,
+      io: { output: { stream: false, status_code: response.status } },
+    });
+
     return response;
   } catch (error) {
     await emitLifecycleError(modelContext, error, {
@@ -161,6 +179,11 @@ export async function POST(request) {
       component: "api.v1.responses",
       source: "route",
       timing: buildTiming(startMs),
+    });
+    await failRequestLifecycle(requestContext, error, {
+      method: "POST",
+      path: "/v1/responses",
+      startTime: startMs,
     });
     throw error;
   }
