@@ -193,6 +193,8 @@ function cloneDefaultData() {
       stickyRoundRobinLimit: 3,
       requireLogin: true,
       observabilityEnabled: true,
+      ampSessionLogsEnabled: true,
+      internalApiLogsEnabled: true,
       observabilityMaxRecords: 1000,
       observabilityBatchSize: 20,
       observabilityFlushIntervalMs: 5000,

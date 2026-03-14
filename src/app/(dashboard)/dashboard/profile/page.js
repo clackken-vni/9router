@@ -1054,7 +1054,7 @@ export default function ProfilePage() {
               <Toggle
                 checked={settings.ampSessionLogsEnabled !== false}
                 onChange={(checked) => updateLoggingToggle("ampSessionLogsEnabled", checked)}
-                disabled={loading || !settings.enableRequestLogs}
+                disabled={loading}
               />
             </div>
 
@@ -1068,13 +1068,13 @@ export default function ProfilePage() {
               <Toggle
                 checked={settings.internalApiLogsEnabled !== false}
                 onChange={(checked) => updateLoggingToggle("internalApiLogsEnabled", checked)}
-                disabled={loading || !settings.enableRequestLogs}
+                disabled={loading}
               />
             </div>
 
             {!settings.enableRequestLogs && (
               <p className="text-xs text-text-muted italic">
-                ENABLE_REQUEST_LOGS=false ở runtime nên hai log file này đang bị tắt toàn cục.
+                ENABLE_REQUEST_LOGS=false ở runtime nên hiện chưa ghi log; bạn vẫn có thể preset trạng thái 2 switch để dùng khi bật lại biến môi trường này.
               </p>
             )}
 
