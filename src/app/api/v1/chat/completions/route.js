@@ -1,12 +1,17 @@
-import { callCloudWithMachineId } from "@/shared/utils/cloud.js";
 import { handleChat } from "@/sse/handlers/chat.js";
+import {
+  buildTiming,
+  createSpanContext,
+  emitLifecycleEnd,
+  emitLifecycleError,
+  emitLifecycleStart,
+  getCorrelationHeaders,
+  resolveCorrelation,
+} from "@/lib/ampObservability";
 import { initTranslators } from "open-sse/translator/index.js";
 
 let initialized = false;
 
-/**
- * Initialize translators once
- */
 async function ensureInitialized() {
   if (!initialized) {
     await initTranslators();
@@ -15,66 +20,135 @@ async function ensureInitialized() {
   }
 }
 
-/**
- * Handle CORS preflight
- */
+function extractModelMeta(body = {}) {
+  const model = body?.model;
+  if (!model || typeof model !== "string") return { raw: model || "unknown" };
+  const [provider, ...rest] = model.split("/");
+  return {
+    raw: model,
+    provider: rest.length ? provider : undefined,
+    name: rest.length ? rest.join("/") : model,
+  };
+}
+
+function wrapStreamResponse(response, streamContext, startMs) {
+  if (!response?.body) return response;
+
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("text/event-stream")) return response;
+
+  const transformer = new TransformStream({
+    start() {
+      streamContext.streamed_bytes = 0;
+    },
+    transform(chunk, controller) {
+      const size = chunk?.byteLength || 0;
+      streamContext.streamed_bytes += size;
+      controller.enqueue(chunk);
+    },
+    async flush() {
+      await emitLifecycleEnd(streamContext, {
+        event: "model.response.end",
+        component: "api.v1.chat.completions",
+        source: "route",
+        timing: buildTiming(startMs, { stream: true, streamed_bytes: streamContext.streamed_bytes }),
+      });
+    },
+  });
+
+  const piped = response.body.pipeThrough(transformer);
+  return new Response(piped, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 export async function OPTIONS() {
   return new Response(null, {
     headers: {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "*"
-    }
+      "Access-Control-Allow-Headers": "*",
+    },
   });
 }
 
-export async function POST(request) {  
-  // Debug: Log ALL incoming requests
+export async function POST(request) {
+  const startMs = Date.now();
+  let body = {};
   try {
-    const clonedRequest = request.clone();
-    const body = await clonedRequest.json();
-    const model = body?.model || "unknown";
-    
-    // Log all requests for debugging
-    console.log("\n" + "=".repeat(60));
-    console.log(`[REQUEST] /v1/chat/completions | Model: ${model}`);
-    console.log("=".repeat(60));
-    
-    // Log key headers
-    const auth = request.headers.get("authorization");
-    const xApiKey = request.headers.get("x-api-key");
-    const userAgent = request.headers.get("user-agent");
-    const host = request.headers.get("host");
-    
-    console.log("Host:", host);
-    console.log("User-Agent:", userAgent);
-    if (auth) console.log("Authorization:", auth.slice(0, 20) + "...");
-    if (xApiKey) console.log("X-API-Key:", xApiKey.slice(0, 20) + "...");
-    
-    // Log body summary
-    console.log("Messages:", body.messages?.length || 0);
-    console.log("Tools:", body.tools?.length || 0);
-    console.log("Stream:", body.stream);
-    
-    // Check for librarian indicators
-    const isLibrarian = 
-      model.includes("sonnet") || 
-      model.includes("librarian") ||
-      String(body?.system || "").toLowerCase().includes("librarian") ||
-      String(body?.metadata?.agent || "").includes("librarian");
-    
-    if (isLibrarian) {
-      console.log("\n>>> LIBRARIAN REQUEST DETECTED <<<");
-      console.log("Full body:", JSON.stringify(body, null, 2).slice(0, 3000));
-    }
-    console.log("=".repeat(60) + "\n");
-  } catch (e) {
-    console.log("[DEBUG] Error logging request:", e.message);
+    body = await request.clone().json();
+  } catch {}
+
+  const rootContext = resolveCorrelation(request.headers);
+  const sessionContext = createSpanContext(rootContext);
+  const modelContext = createSpanContext(rootContext);
+
+  await emitLifecycleStart(sessionContext, {
+    event: "session.start",
+    component: "api.v1.chat.completions",
+    source: "route",
+    meta: { endpoint: "/v1/chat/completions" },
+  });
+
+  await emitLifecycleStart(modelContext, {
+    event: "model.request.start",
+    component: "api.v1.chat.completions",
+    source: "route",
+    model: extractModelMeta(body),
+    meta: {
+      stream: !!body?.stream,
+      message_count: body?.messages?.length || body?.input?.length || 0,
+      tool_count: body?.tools?.length || 0,
+      tool_call_requested: !!body?.tools?.length,
+    },
+  });
+
+  if (body?.stream) {
+    await emitLifecycleStart(createSpanContext(modelContext), {
+      event: "model.request.stream.start",
+      component: "api.v1.chat.completions",
+      source: "route",
+      model: extractModelMeta(body),
+      meta: { mode: "sse" },
+    });
   }
 
-  // Fallback to local handling
-  await ensureInitialized();
-  
-  return await handleChat(request);
-}
+  const downstreamHeaders = new Headers(request.headers);
+  const correlationHeaders = getCorrelationHeaders(modelContext);
+  for (const [key, value] of Object.entries(correlationHeaders)) {
+    if (value) downstreamHeaders.set(key, String(value));
+  }
 
+  const downstreamRequest = new Request(request, { headers: downstreamHeaders });
+
+  try {
+    await ensureInitialized();
+    const response = await handleChat(downstreamRequest);
+
+    if (body?.stream) {
+      return wrapStreamResponse(response, modelContext, startMs);
+    }
+
+    await emitLifecycleEnd(modelContext, {
+      event: "model.response.end",
+      component: "api.v1.chat.completions",
+      source: "route",
+      model: extractModelMeta(body),
+      meta: { status_code: response.status },
+      timing: buildTiming(startMs, { stream: false }),
+    });
+
+    return response;
+  } catch (error) {
+    await emitLifecycleError(modelContext, error, {
+      event: "model.response.error",
+      component: "api.v1.chat.completions",
+      source: "route",
+      model: extractModelMeta(body),
+      timing: buildTiming(startMs),
+    });
+    throw error;
+  }
+}
