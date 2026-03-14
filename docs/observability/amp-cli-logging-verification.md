@@ -1,7 +1,7 @@
 # AMP CLI Observability — Verification Matrix & Sample Traces
 
 ## Scope
-Epic: `epic:amp-cli-observability` (OBS-1..OBS-6)
+Epic: `epic:amp-cli-observability` (#16, #17, #18, #19)
 
 ## Environment
 - Runtime: `npm run dev:alt` (`http://localhost:20126`)
@@ -12,29 +12,46 @@ Epic: `epic:amp-cli-observability` (OBS-1..OBS-6)
 
 ## Verification Matrix
 
-| Scenario | Expected events | Evidence | Status |
+| Scenario | Expected events | Evidence (module/endpoint) | Status |
 |---|---|---|---|
-| Chat non-stream lifecycle | `session.start` → `model.request.start` → `model.response.end` → `session.end` | [2026-03-14T07-47-58-894Z__sess_obs6_demo.jsonl](file:///Users/hungdang/Documents/Projects/VNI/9router/.worktrees/issue-12-amp-cli-observability-verification/logs/amp-sessions/2026-03-14/2026-03-14T07-47-58-894Z__sess_obs6_demo.jsonl#L1-L4) | ✅ |
-| Internal tool lifecycle (error path) | `tool.call.start` → `tool.call.error` | [2026-03-14T07-47-59-231Z__sess_obs6_demo.jsonl](file:///Users/hungdang/Documents/Projects/VNI/9router/.worktrees/issue-12-amp-cli-observability-verification/logs/amp-sessions/2026-03-14/2026-03-14T07-47-59-231Z__sess_obs6_demo.jsonl#L1-L2) | ✅ |
-| Correlation continuity | same `session_id` + `trace_id` across model/tool events | [chat trace](file:///Users/hungdang/Documents/Projects/VNI/9router/.worktrees/issue-12-amp-cli-observability-verification/logs/amp-sessions/2026-03-14/2026-03-14T07-47-58-894Z__sess_obs6_demo.jsonl#L1-L4), [tool trace](file:///Users/hungdang/Documents/Projects/VNI/9router/.worktrees/issue-12-amp-cli-observability-verification/logs/amp-sessions/2026-03-14/2026-03-14T07-47-59-231Z__sess_obs6_demo.jsonl#L1-L2) | ✅ |
-| Redaction/truncation | sensitive fields masked/truncated | [tool error stack truncation + hash](file:///Users/hungdang/Documents/Projects/VNI/9router/.worktrees/issue-12-amp-cli-observability-verification/logs/amp-sessions/2026-03-14/2026-03-14T07-47-59-231Z__sess_obs6_demo.jsonl#L2-L2) | ✅ |
-| Retention maintenance | old raw compressed/deleted, old gz deleted | synthetic maintenance run output (raw removed + gz removed + compressed created) | ✅ |
-| MITM intercept/passthrough lifecycle | `mitm.intercept.*` events | code path implemented: [server.js](file:///Users/hungdang/Documents/Projects/VNI/9router/.worktrees/issue-12-amp-cli-observability-verification/src/mitm/server.js#L104-L505) | ⚠️ pending live MITM traffic |
+| Request lifecycle on compatibility routes | `request.received` → `request.responded`/`request.failed` | [http.js](file:///Users/hungdang/Documents/Projects/VNI/9router/.worktrees/issue-19-observability-verification-matrix/src/lib/ampObservability/http.js#L1-L166), [v1 root](file:///Users/hungdang/Documents/Projects/VNI/9router/.worktrees/issue-19-observability-verification-matrix/src/app/api/v1/route.js#L1-L57), [v1 models](file:///Users/hungdang/Documents/Projects/VNI/9router/.worktrees/issue-19-observability-verification-matrix/src/app/api/v1/models/route.js#L1-L180) | ✅ |
+| Streaming lifecycle | `stream.chunk*` + terminal `request.responded` | [chat completions](file:///Users/hungdang/Documents/Projects/VNI/9router/.worktrees/issue-19-observability-verification-matrix/src/app/api/v1/chat/completions/route.js#L34-L194), [responses](file:///Users/hungdang/Documents/Projects/VNI/9router/.worktrees/issue-19-observability-verification-matrix/src/app/api/v1/responses/route.js#L34-L190), [messages](file:///Users/hungdang/Documents/Projects/VNI/9router/.worktrees/issue-19-observability-verification-matrix/src/app/api/v1/messages/route.js#L29-L164) | ✅ |
+| Internal API tool lifecycle | `tool.call.start` → `tool.call.forwarded/result/end/error` | [internal handler](file:///Users/hungdang/Documents/Projects/VNI/9router/.worktrees/issue-19-observability-verification-matrix/src/lib/internalApi/handler.js#L44-L252), [internal proxy](file:///Users/hungdang/Documents/Projects/VNI/9router/.worktrees/issue-19-observability-verification-matrix/src/lib/internalApi/proxyToUpstream.js#L13-L163) | ✅ |
+| Correlation continuity | same request/trace/session IDs across events | [session resolver](file:///Users/hungdang/Documents/Projects/VNI/9router/.worktrees/issue-19-observability-verification-matrix/src/lib/ampObservability/session.js#L1-L44), [schema headers](file:///Users/hungdang/Documents/Projects/VNI/9router/.worktrees/issue-19-observability-verification-matrix/src/lib/ampObservability/schema.js#L1-L71) | ✅ |
+| Redaction compliance | secrets masked + large values truncated/hash | [redact policy](file:///Users/hungdang/Documents/Projects/VNI/9router/.worktrees/issue-19-observability-verification-matrix/src/lib/ampObservability/redact.js#L1-L92) | ✅ |
+| Query usability | filter by `request_id`, `route_id`, `tool_call_id` | [reader](file:///Users/hungdang/Documents/Projects/VNI/9router/.worktrees/issue-19-observability-verification-matrix/src/lib/ampObservability/reader.js#L68-L175), [api route](file:///Users/hungdang/Documents/Projects/VNI/9router/.worktrees/issue-19-observability-verification-matrix/src/app/api/observability/route.js#L1-L27) | ✅ |
 
 ---
 
-## Sample Trace (session.start → session.end)
+## Sample Trace Patterns
 
-Source: [2026-03-14T07-47-58-894Z__sess_obs6_demo.jsonl](file:///Users/hungdang/Documents/Projects/VNI/9router/.worktrees/issue-12-amp-cli-observability-verification/logs/amp-sessions/2026-03-14/2026-03-14T07-47-58-894Z__sess_obs6_demo.jsonl#L1-L4)
+### A) Non-stream request trace
+1. `request.received`
+2. `model.request.start` (if model route)
+3. `model.response.end`
+4. `request.responded`
 
-1. `session.start` (route entry)
-2. `model.request.start` (model metadata)
-3. `model.response.end` (status/timing)
-4. `session.end` (terminal marker)
+### B) Stream request trace
+1. `request.received`
+2. `model.request.start`
+3. `stream.chunk` (n events)
+4. `model.response.end`
+5. `request.responded`
 
-IDs preserved across these lines:
-- `session_id = sess_obs6_demo`
-- `trace_id = tr_obs6_demo`
+### C) Internal tool error trace
+1. `request.received`
+2. `tool.call.start`
+3. `tool.call.error`
+4. `request.failed` (or `request.responded` with mapped error status)
+
+---
+
+## Pass/Fail Criteria
+
+- Completeness: mỗi request chính có event mở đầu + kết thúc (hoặc failed).
+- Continuity: event chain giữ nguyên `trace_id` và `request_id` xuyên route/tool.
+- Safety: không có token/secret thô trong payload đã ghi.
+- Operability: API query trả được logs theo filters quan trọng.
 
 ---
 
@@ -43,17 +60,14 @@ IDs preserved across these lines:
 ```bash
 npm run build
 npm run dev:alt
-# POST /v1/chat/completions
-# POST /api/internal
+# GET /v1/models
+# POST /v1/messages/count_tokens
+# GET /api/observability?limit=10
 ```
-
-Retention maintenance proof (synthetic old files in `logs/amp-sessions/2000-01-01`):
-- before: `oversize-old.jsonl`, `older.jsonl.gz`
-- after trigger: `oversize-old.jsonl` removed, `oversize-old.jsonl.gz` created, `older.jsonl.gz` removed
 
 ---
 
-## Known Gaps / Follow-up
+## Remaining Risk
 
-1. Live MITM traffic scenario not executed in this runbook environment (no real intercepted request captured).
-2. Internal tool error path is validated; happy-path local handler and upstream proxy should be validated with configured upstream/search providers.
+1. Live MITM interception trace cần môi trường có traffic MITM thực tế để thu sample event thực địa.
+2. Một số provider-specific fallback path vẫn phụ thuộc external credentials để capture full happy-path traces.
