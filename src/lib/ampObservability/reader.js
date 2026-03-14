@@ -126,6 +126,28 @@ export function queryObservabilityEvents(params = {}) {
   const events = [];
   let scannedLines = 0;
   let malformedLines = 0;
+  const FACET_LIMIT = 200;
+  const facetSets = {
+    status: new Set(),
+    component: new Set(),
+    source: new Set(),
+    event: new Set(),
+    session_id: new Set(),
+    trace_id: new Set(),
+    request_id: new Set(),
+    route_id: new Set(),
+    tool_call_id: new Set(),
+    tool_method: new Set(),
+    model: new Set(),
+    provider: new Set(),
+  };
+
+  const addFacet = (name, value) => {
+    if (!value) return;
+    const set = facetSets[name];
+    if (!set || set.size >= FACET_LIMIT) return;
+    set.add(String(value));
+  };
 
   for (const filePath of files) {
     const lines = readLinesFromFile(filePath);
@@ -138,6 +160,20 @@ export function queryObservabilityEvents(params = {}) {
         malformedLines += 1;
         continue;
       }
+
+      addFacet("status", event.status);
+      addFacet("component", event.component);
+      addFacet("source", event.source);
+      addFacet("event", event.event);
+      addFacet("session_id", event.session_id);
+      addFacet("trace_id", event.trace_id);
+      addFacet("request_id", event.request_id);
+      addFacet("route_id", event.route_id);
+      addFacet("tool_call_id", event.tool_call_id);
+      addFacet("tool_method", event?.tool?.method);
+      addFacet("model", event?.model?.name);
+      addFacet("provider", event?.model?.provider);
+
       if (!matchesFilter(event, filters)) continue;
       events.push(event);
       if (events.length >= limit) break;
@@ -147,20 +183,19 @@ export function queryObservabilityEvents(params = {}) {
 
   events.sort((a, b) => String(b.timestamp || "").localeCompare(String(a.timestamp || "")));
 
-  const unique = (arr) => Array.from(new Set(arr.filter(Boolean))).sort();
   const facets = {
-    status: unique(events.map((event) => event.status)),
-    component: unique(events.map((event) => event.component)),
-    source: unique(events.map((event) => event.source)),
-    event: unique(events.map((event) => event.event)),
-    session_id: unique(events.map((event) => event.session_id)),
-    trace_id: unique(events.map((event) => event.trace_id)),
-    request_id: unique(events.map((event) => event.request_id)),
-    route_id: unique(events.map((event) => event.route_id)),
-    tool_call_id: unique(events.map((event) => event.tool_call_id)),
-    tool_method: unique(events.map((event) => event?.tool?.method)),
-    model: unique(events.map((event) => event?.model?.name)),
-    provider: unique(events.map((event) => event?.model?.provider)),
+    status: Array.from(facetSets.status).sort(),
+    component: Array.from(facetSets.component).sort(),
+    source: Array.from(facetSets.source).sort(),
+    event: Array.from(facetSets.event).sort(),
+    session_id: Array.from(facetSets.session_id).sort(),
+    trace_id: Array.from(facetSets.trace_id).sort(),
+    request_id: Array.from(facetSets.request_id).sort(),
+    route_id: Array.from(facetSets.route_id).sort(),
+    tool_call_id: Array.from(facetSets.tool_call_id).sort(),
+    tool_method: Array.from(facetSets.tool_method).sort(),
+    model: Array.from(facetSets.model).sort(),
+    provider: Array.from(facetSets.provider).sort(),
   };
 
   return {

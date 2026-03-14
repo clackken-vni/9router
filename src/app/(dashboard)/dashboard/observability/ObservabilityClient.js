@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { Button, Card, Input } from "@/shared/components";
+import { Button, Card, Input, Select } from "@/shared/components";
 
 const viewOptions = [
   { value: "list", label: "List" },
@@ -23,6 +23,23 @@ const filterFieldLabels = {
   model: "Model",
   provider: "Provider",
 };
+
+const filterFieldOrder = [
+  "status",
+  "component",
+  "source",
+  "event",
+  "session_id",
+  "trace_id",
+  "request_id",
+  "route_id",
+  "tool_call_id",
+  "tool_method",
+  "model",
+  "provider",
+];
+
+const toSelectOptions = (values = []) => [{ value: "", label: "All" }, ...values.map((value) => ({ value, label: value }))];
 
 function getEventDisplayName(evt) {
   if (evt?.event?.startsWith("tool.call") && evt?.tool?.method) {
@@ -140,20 +157,15 @@ export default function ObservabilityClient() {
     });
   };
 
-  const facetKeys = useMemo(() => Object.keys(filterFieldLabels), []);
+  const facetKeys = useMemo(() => filterFieldOrder, []);
 
-  const getListId = (field) => `observability-filter-${field}`;
-
-  const renderFilterInput = (field) => (
-    <Input
-      key={field}
-      label={filterFieldLabels[field]}
-      placeholder={`Filter ${filterFieldLabels[field].toLowerCase()}`}
-      value={filters[field]}
-      onChange={applyField(field)}
-      list={getListId(field)}
-    />
-  );
+  const facetSelectOptions = useMemo(() => {
+    const entries = {};
+    for (const key of facetKeys) {
+      entries[key] = toSelectOptions(data.facets?.[key] || []);
+    }
+    return entries;
+  }, [data.facets, facetKeys]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -161,16 +173,24 @@ export default function ObservabilityClient() {
         <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-3">
           <Input label="Day" type="date" value={filters.day} onChange={applyField("day")} />
           <Input label="Keyword" placeholder="Any keyword in payload/meta/tool/model" value={filters.q} onChange={applyField("q")} />
-          {facetKeys.map(renderFilterInput)}
+          {facetKeys.map((field) => (
+            <div key={`filter-${field}`} className="flex flex-col gap-1.5">
+              <Select
+                label={filterFieldLabels[field]}
+                value={filters[field]}
+                onChange={applyField(field)}
+                options={facetSelectOptions[field] || [{ value: "", label: "All" }]}
+                placeholder="All"
+              />
+              <Input
+                placeholder={`Type ${filterFieldLabels[field].toLowerCase()}`}
+                value={filters[field]}
+                onChange={applyField(field)}
+              />
+            </div>
+          ))}
           <Input label="Limit" type="number" min="1" max="500" value={filters.limit} onChange={applyField("limit")} />
         </div>
-        {facetKeys.map((field) => (
-          <datalist key={`list-${field}`} id={getListId(field)}>
-            {(data.facets?.[field] || []).map((value) => (
-              <option key={`${field}-${value}`} value={value} />
-            ))}
-          </datalist>
-        ))}
         <div className="flex flex-wrap gap-2 mt-4">
           <Button variant="primary" icon="filter_alt" onClick={fetchData} loading={loading}>Apply</Button>
           <Button variant="outline" icon="refresh" onClick={fetchData} loading={loading}>Refresh</Button>
