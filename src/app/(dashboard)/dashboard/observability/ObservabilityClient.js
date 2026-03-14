@@ -319,11 +319,11 @@ export default function ObservabilityClient() {
           )}
         </Card>
 
-        <Card title="Event Detail" icon="plagiarism" className="overflow-hidden h-fit xl:sticky xl:top-4 self-start">
+        <Card title="Event Detail" icon="plagiarism" className="overflow-hidden h-fit xl:sticky xl:top-4 self-start xl:max-h-[calc(100vh-2rem)]">
           {!selectedEvent ? (
             <div className="text-sm text-text-muted">Select an event to inspect full payload.</div>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-3 max-h-[calc(100vh-7rem)] overflow-y-auto pr-1">
               <div className="text-xs text-text-muted">{selectedEvent.timestamp}</div>
               <div className="font-mono text-sm break-all">{getEventDisplayName(selectedEvent)}</div>
               <div className="grid grid-cols-1 gap-2 text-xs">
