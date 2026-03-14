@@ -329,6 +329,21 @@ export default function ProfilePage() {
     }
   };
 
+  const updateLoggingToggle = async (key, enabled) => {
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [key]: enabled }),
+      });
+      if (res.ok) {
+        setSettings((prev) => ({ ...prev, [key]: enabled }));
+      }
+    } catch (err) {
+      console.error(`Failed to update ${key}:`, err);
+    }
+  };
+
   const moveSearchProvider = (index, direction) => {
     setSearchProvidersForm((prev) => {
       const next = [...prev.providers];
@@ -1029,6 +1044,40 @@ export default function ProfilePage() {
             </div>
 
             <div className={cn("flex flex-col gap-4", !observabilityEnabled && "opacity-60")}>
+            <div className="flex items-center justify-between pt-2 border-t border-border/50">
+              <div>
+                <p className="font-medium">Amp Session Logs</p>
+                <p className="text-sm text-text-muted">
+                  Write structured session events into logs/amp-sessions.
+                </p>
+              </div>
+              <Toggle
+                checked={settings.ampSessionLogsEnabled !== false}
+                onChange={(checked) => updateLoggingToggle("ampSessionLogsEnabled", checked)}
+                disabled={loading || !settings.enableRequestLogs}
+              />
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-medium">Internal API Log File</p>
+                <p className="text-sm text-text-muted">
+                  Write internal API request logs into logs/internal-api.log.
+                </p>
+              </div>
+              <Toggle
+                checked={settings.internalApiLogsEnabled !== false}
+                onChange={(checked) => updateLoggingToggle("internalApiLogsEnabled", checked)}
+                disabled={loading || !settings.enableRequestLogs}
+              />
+            </div>
+
+            {!settings.enableRequestLogs && (
+              <p className="text-xs text-text-muted italic">
+                ENABLE_REQUEST_LOGS=false ở runtime nên hai log file này đang bị tắt toàn cục.
+              </p>
+            )}
+
             <div className="flex items-center justify-between">
               <div>
                 <p className="font-medium">Max Records</p>

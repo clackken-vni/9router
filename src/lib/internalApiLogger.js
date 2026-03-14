@@ -1,9 +1,16 @@
 import fs from "fs";
 import path from "path";
+import { getSettingsSnapshot } from "@/lib/localDb";
 
 const LOG_DIR = path.join(process.cwd(), "logs");
 const LOG_FILE = path.join(LOG_DIR, "internal-api.log");
 const MAX_LOG_SIZE = 10 * 1024 * 1024; // 10MB
+
+function isInternalApiLoggingEnabled() {
+  if (process.env.ENABLE_REQUEST_LOGS !== "true") return false;
+  const settings = getSettingsSnapshot();
+  return settings?.internalApiLogsEnabled !== false;
+}
 
 // Ensure log directory exists
 if (!fs.existsSync(LOG_DIR)) {
@@ -37,6 +44,7 @@ function formatTimestamp() {
 }
 
 function writeLog(level, category, message, data = null) {
+  if (!isInternalApiLoggingEnabled()) return;
   rotateLogIfNeeded();
   
   const timestamp = formatTimestamp();
