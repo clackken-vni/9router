@@ -109,15 +109,32 @@ export function fixMissingToolResponses(body) {
   return body;
 }
 
+export function safeParseToolArguments(rawArgs) {
+  if (typeof rawArgs !== "string") return { complete: false, parsed: null };
+  const args = rawArgs.trim();
+  if (!args) return { complete: true, parsed: {} };
+
+  try {
+    return { complete: true, parsed: JSON.parse(args) };
+  } catch {
+    return { complete: false, parsed: null };
+  }
+}
+
+export function isToolCallComplete(toolCall) {
+  if (!toolCall || typeof toolCall !== "object") return false;
+  if (!toolCall.id || !toolCall.function?.name) return false;
+
+  if (toolCall._amp_complete === true) return true;
+
+  const args = toolCall.function?.arguments;
+  const parsed = safeParseToolArguments(args);
+  return parsed.complete;
+}
+
 export function getCompleteToolCalls(toolCalls = []) {
   if (!Array.isArray(toolCalls) || toolCalls.length === 0) return [];
 
-  return toolCalls.filter((tc) => {
-    if (!tc || typeof tc !== "object") return false;
-    if (!tc.id || !tc.function?.name) return false;
-    const args = tc.function?.arguments;
-    if (typeof args !== "string") return false;
-    return args.trim().startsWith("{") || args.trim().startsWith("[") || args.trim() === "";
-  });
+  return toolCalls.filter((tc) => isToolCallComplete(tc));
 }
 
