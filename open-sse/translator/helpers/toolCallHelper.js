@@ -109,3 +109,15 @@ export function fixMissingToolResponses(body) {
   return body;
 }
 
+export function getCompleteToolCalls(toolCalls = []) {
+  if (!Array.isArray(toolCalls) || toolCalls.length === 0) return [];
+
+  return toolCalls.filter((tc) => {
+    if (!tc || typeof tc !== "object") return false;
+    if (!tc.id || !tc.function?.name) return false;
+    const args = tc.function?.arguments;
+    if (typeof args !== "string") return false;
+    return args.trim().startsWith("{") || args.trim().startsWith("[") || args.trim() === "";
+  });
+}
+
