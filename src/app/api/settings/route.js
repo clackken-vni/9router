@@ -126,8 +126,8 @@ export async function GET(request) {
     
     const enableRequestLogs = process.env.ENABLE_REQUEST_LOGS === "true";
     const enableTranslator = process.env.ENABLE_TRANSLATOR === "true";
-    const ampSessionLogsEnabled = enableRequestLogs && settings.ampSessionLogsEnabled !== false;
-    const internalApiLogsEnabled = enableRequestLogs && settings.internalApiLogsEnabled !== false;
+    const ampSessionLogsEnabled = settings.ampSessionLogsEnabled !== false;
+    const internalApiLogsEnabled = settings.internalApiLogsEnabled !== false;
     
     return NextResponse.json({ 
       ...redactedSettings, 
