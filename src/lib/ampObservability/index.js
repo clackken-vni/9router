@@ -1,6 +1,11 @@
 import { resolveCorrelation, createSpanContext, childSpan } from "@/lib/ampObservability/session";
 import { getCorrelationHeaders } from "@/lib/ampObservability/schema";
-import { normalizeError, resolveDurationMs } from "@/lib/ampObservability/helpers";
+import {
+  normalizeError,
+  resolveDurationMs,
+  pickCorrelationFields,
+  summarizeHeaders,
+} from "@/lib/ampObservability/helpers";
 import { writeEvent, flushAll, ensureFlushHooks, getSessionLogPath, runMaintenance } from "@/lib/ampObservability/writer";
 
 export {
@@ -9,6 +14,8 @@ export {
   childSpan,
   getCorrelationHeaders,
   getSessionLogPath,
+  pickCorrelationFields,
+  summarizeHeaders,
 };
 
 ensureFlushHooks();

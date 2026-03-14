@@ -72,6 +72,9 @@ function matchesFilter(event, filters) {
   if (filters.event && event.event !== filters.event) return false;
   if (filters.session_id && event.session_id !== filters.session_id) return false;
   if (filters.trace_id && event.trace_id !== filters.trace_id) return false;
+  if (filters.request_id && event.request_id !== filters.request_id) return false;
+  if (filters.route_id && event.route_id !== filters.route_id) return false;
+  if (filters.tool_call_id && event.tool_call_id !== filters.tool_call_id) return false;
 
   if (filters.from) {
     const ts = parseDate(event.timestamp);
@@ -87,8 +90,14 @@ function matchesFilter(event, filters) {
       event.event,
       event.component,
       event.source,
+      event.request_id,
+      event.route_id,
+      event.tool_call_id,
       event.error?.message,
       JSON.stringify(event.tool || {}),
+      JSON.stringify(event.model || {}),
+      JSON.stringify(event.request || {}),
+      JSON.stringify(event.response || {}),
       JSON.stringify(event.meta || {}),
     ].join(" ").toLowerCase();
     if (!hay.includes(filters.q.toLowerCase())) return false;
@@ -110,6 +119,9 @@ export function queryObservabilityEvents(params = {}) {
     event: params.event || "",
     session_id: params.session_id || "",
     trace_id: params.trace_id || "",
+    request_id: params.request_id || "",
+    route_id: params.route_id || "",
+    tool_call_id: params.tool_call_id || "",
   };
 
   const files = discoverFiles(filters);
@@ -150,6 +162,9 @@ export function queryObservabilityEvents(params = {}) {
       event: filters.event || null,
       session_id: filters.session_id || null,
       trace_id: filters.trace_id || null,
+      request_id: filters.request_id || null,
+      route_id: filters.route_id || null,
+      tool_call_id: filters.tool_call_id || null,
       limit,
     },
     summary: {
