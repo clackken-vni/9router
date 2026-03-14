@@ -25,7 +25,7 @@ import { handleJsonToSSE } from "./chatCore/jsonToSseHandler.js";
  * @param {object} options.credentials - Provider credentials
  * @param {string} options.sourceFormatOverride - Override detected source format (e.g. "openai-responses")
  */
-export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, sourceFormatOverride }) {
+export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, sourceFormatOverride, streamInterventionState = null }) {
   const { provider, model } = modelInfo;
   const requestStartTime = Date.now();
 
@@ -69,13 +69,18 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     log, provider, model
   });
 
-  const streamInterventionState = createState({
+  const interventionState = streamInterventionState || createState({
     request_id: connectionId,
     provider,
     model,
     attempt: 1
   });
-  queueEvent(streamInterventionState, {
+  interventionState.context.provider = provider;
+  interventionState.context.model = model;
+  if (!Number.isFinite(interventionState.context.attempt) || interventionState.context.attempt < 1) {
+    interventionState.context.attempt = 1;
+  }
+  queueEvent(interventionState, {
     type: STREAM_INTERVENTION_EVENT_TYPES.STATUS,
     phase: "request.accepted",
     data: {
@@ -183,7 +188,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   // Streaming response
   const { onStreamComplete } = buildOnStreamComplete({ ...sharedCtx });
-  return handleStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, streamController, onStreamComplete, streamInterventionState });
+  return handleStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, streamController, onStreamComplete, streamInterventionState: interventionState });
 }
 
 export function isTokenExpiringSoon(expiresAt, bufferMs = 5 * 60 * 1000) {
