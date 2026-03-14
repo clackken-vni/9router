@@ -65,19 +65,24 @@ function discoverFiles({ day, from, to }) {
   return out.sort().reverse();
 }
 
+function matchesText(actual, expected) {
+  if (!expected) return true;
+  return String(actual || "").toLowerCase().includes(String(expected || "").toLowerCase());
+}
+
 function matchesFilter(event, filters) {
-  if (filters.status && event.status !== filters.status) return false;
-  if (filters.component && event.component !== filters.component) return false;
-  if (filters.source && event.source !== filters.source) return false;
-  if (filters.event && event.event !== filters.event) return false;
-  if (filters.session_id && event.session_id !== filters.session_id) return false;
-  if (filters.trace_id && event.trace_id !== filters.trace_id) return false;
-  if (filters.request_id && event.request_id !== filters.request_id) return false;
-  if (filters.route_id && event.route_id !== filters.route_id) return false;
-  if (filters.tool_call_id && event.tool_call_id !== filters.tool_call_id) return false;
-  if (filters.tool_method && event?.tool?.method !== filters.tool_method) return false;
-  if (filters.model && event?.model?.name !== filters.model) return false;
-  if (filters.provider && event?.model?.provider !== filters.provider) return false;
+  if (!matchesText(event.status, filters.status)) return false;
+  if (!matchesText(event.component, filters.component)) return false;
+  if (!matchesText(event.source, filters.source)) return false;
+  if (!matchesText(event.event, filters.event)) return false;
+  if (!matchesText(event.session_id, filters.session_id)) return false;
+  if (!matchesText(event.trace_id, filters.trace_id)) return false;
+  if (!matchesText(event.request_id, filters.request_id)) return false;
+  if (!matchesText(event.route_id, filters.route_id)) return false;
+  if (!matchesText(event.tool_call_id, filters.tool_call_id)) return false;
+  if (!matchesText(event?.tool?.method, filters.tool_method)) return false;
+  if (!matchesText(event?.model?.name, filters.model)) return false;
+  if (!matchesText(event?.model?.provider, filters.provider)) return false;
 
   if (filters.from) {
     const ts = parseDate(event.timestamp);
@@ -89,23 +94,7 @@ function matchesFilter(event, filters) {
   }
 
   if (filters.q) {
-    const hay = [
-      event.event,
-      event.component,
-      event.source,
-      event.request_id,
-      event.route_id,
-      event.tool_call_id,
-      event.error?.message,
-      event?.tool?.method,
-      event?.model?.name,
-      event?.model?.provider,
-      JSON.stringify(event.tool || {}),
-      JSON.stringify(event.model || {}),
-      JSON.stringify(event.request || {}),
-      JSON.stringify(event.response || {}),
-      JSON.stringify(event.meta || {}),
-    ].join(" ").toLowerCase();
+    const hay = JSON.stringify(event || {}).toLowerCase();
     if (!hay.includes(filters.q.toLowerCase())) return false;
   }
 
