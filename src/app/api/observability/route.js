@@ -18,6 +18,9 @@ export async function GET(request) {
       request_id: url.searchParams.get("request_id") || "",
       route_id: url.searchParams.get("route_id") || "",
       tool_call_id: url.searchParams.get("tool_call_id") || "",
+      tool_method: url.searchParams.get("tool_method") || "",
+      model: url.searchParams.get("model") || "",
+      provider: url.searchParams.get("provider") || "",
       limit: url.searchParams.get("limit") || "100",
     });
     return NextResponse.json(data);

@@ -75,6 +75,9 @@ function matchesFilter(event, filters) {
   if (filters.request_id && event.request_id !== filters.request_id) return false;
   if (filters.route_id && event.route_id !== filters.route_id) return false;
   if (filters.tool_call_id && event.tool_call_id !== filters.tool_call_id) return false;
+  if (filters.tool_method && event?.tool?.method !== filters.tool_method) return false;
+  if (filters.model && event?.model?.name !== filters.model) return false;
+  if (filters.provider && event?.model?.provider !== filters.provider) return false;
 
   if (filters.from) {
     const ts = parseDate(event.timestamp);
@@ -94,6 +97,9 @@ function matchesFilter(event, filters) {
       event.route_id,
       event.tool_call_id,
       event.error?.message,
+      event?.tool?.method,
+      event?.model?.name,
+      event?.model?.provider,
       JSON.stringify(event.tool || {}),
       JSON.stringify(event.model || {}),
       JSON.stringify(event.request || {}),
@@ -122,6 +128,9 @@ export function queryObservabilityEvents(params = {}) {
     request_id: params.request_id || "",
     route_id: params.route_id || "",
     tool_call_id: params.tool_call_id || "",
+    tool_method: params.tool_method || "",
+    model: params.model || "",
+    provider: params.provider || "",
   };
 
   const files = discoverFiles(filters);
@@ -149,6 +158,22 @@ export function queryObservabilityEvents(params = {}) {
 
   events.sort((a, b) => String(b.timestamp || "").localeCompare(String(a.timestamp || "")));
 
+  const unique = (arr) => Array.from(new Set(arr.filter(Boolean))).sort();
+  const facets = {
+    status: unique(events.map((event) => event.status)),
+    component: unique(events.map((event) => event.component)),
+    source: unique(events.map((event) => event.source)),
+    event: unique(events.map((event) => event.event)),
+    session_id: unique(events.map((event) => event.session_id)),
+    trace_id: unique(events.map((event) => event.trace_id)),
+    request_id: unique(events.map((event) => event.request_id)),
+    route_id: unique(events.map((event) => event.route_id)),
+    tool_call_id: unique(events.map((event) => event.tool_call_id)),
+    tool_method: unique(events.map((event) => event?.tool?.method)),
+    model: unique(events.map((event) => event?.model?.name)),
+    provider: unique(events.map((event) => event?.model?.provider)),
+  };
+
   return {
     ok: true,
     filters: {
@@ -165,8 +190,12 @@ export function queryObservabilityEvents(params = {}) {
       request_id: filters.request_id || null,
       route_id: filters.route_id || null,
       tool_call_id: filters.tool_call_id || null,
+      tool_method: filters.tool_method || null,
+      model: filters.model || null,
+      provider: filters.provider || null,
       limit,
     },
+    facets,
     summary: {
       scannedFiles: files.length,
       scannedLines,
