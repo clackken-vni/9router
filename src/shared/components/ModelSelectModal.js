@@ -12,6 +12,8 @@ const PROVIDER_ORDER = [
   ...Object.keys(APIKEY_PROVIDERS),
 ];
 
+const normalizeSearchText = (value) => String(value || "").toLowerCase();
+
 export default function ModelSelectModal({
   isOpen,
   onClose,
@@ -166,25 +168,25 @@ export default function ModelSelectModal({
   // Filter combos by search query
   const filteredCombos = useMemo(() => {
     if (!searchQuery.trim()) return combos;
-    const query = searchQuery.toLowerCase();
-    return combos.filter(c => c.name.toLowerCase().includes(query));
+    const query = normalizeSearchText(searchQuery);
+    return combos.filter(c => normalizeSearchText(c?.name).includes(query));
   }, [combos, searchQuery]);
 
   // Filter models by search query
   const filteredGroups = useMemo(() => {
     if (!searchQuery.trim()) return groupedModels;
 
-    const query = searchQuery.toLowerCase();
+    const query = normalizeSearchText(searchQuery);
     const filtered = {};
 
     Object.entries(groupedModels).forEach(([providerId, group]) => {
       const matchedModels = group.models.filter(
         (m) =>
-          m.name.toLowerCase().includes(query) ||
-          m.id.toLowerCase().includes(query)
+          normalizeSearchText(m?.name).includes(query) ||
+          normalizeSearchText(m?.id).includes(query)
       );
 
-      const providerNameMatches = group.name.toLowerCase().includes(query);
+      const providerNameMatches = normalizeSearchText(group?.name).includes(query);
 
       if (matchedModels.length > 0 || providerNameMatches) {
         filtered[providerId] = {

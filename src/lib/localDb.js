@@ -82,6 +82,32 @@ function buildDefaultSearchProviders() {
   };
 }
 
+function buildDefaultMcpSettings() {
+  return {
+    servers: [],
+    secrets: {},
+  };
+}
+
+function normalizeMcpSettings(config) {
+  const base = buildDefaultMcpSettings();
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return base;
+  }
+
+  const servers = Array.isArray(config.servers) ? config.servers : [];
+  const secrets = config.secrets && typeof config.secrets === "object" && !Array.isArray(config.secrets)
+    ? config.secrets
+    : {};
+
+  return {
+    ...base,
+    ...config,
+    servers,
+    secrets,
+  };
+}
+
 function normalizeSearchProviderItem(item = {}) {
   const next = item && typeof item === "object" && !Array.isArray(item) ? { ...item } : {};
   return {
@@ -144,7 +170,8 @@ const defaultData = {
     ampRestrictManagementToLocalhost: false,
     ampModelMappings: {},
     ampInternalOverrides: buildDefaultAmpInternalOverrides(),
-    searchProviders: buildDefaultSearchProviders()
+    searchProviders: buildDefaultSearchProviders(),
+    mcp: buildDefaultMcpSettings()
   },
   pricing: {} // NEW: pricing configuration
 };
@@ -176,7 +203,8 @@ function cloneDefaultData() {
       ampRestrictManagementToLocalhost: false,
       ampModelMappings: {},
       ampInternalOverrides: buildDefaultAmpInternalOverrides(),
-      searchProviders: buildDefaultSearchProviders()
+      searchProviders: buildDefaultSearchProviders(),
+      mcp: buildDefaultMcpSettings()
     },
     pricing: {},
   };
@@ -228,6 +256,12 @@ function ensureDbShape(data) {
       const normalizedSearchProviders = normalizeSearchProvidersConfig(next.settings.searchProviders);
       if (JSON.stringify(normalizedSearchProviders) !== JSON.stringify(next.settings.searchProviders)) {
         next.settings.searchProviders = normalizedSearchProviders;
+        changed = true;
+      }
+
+      const normalizedMcpSettings = normalizeMcpSettings(next.settings.mcp);
+      if (JSON.stringify(normalizedMcpSettings) !== JSON.stringify(next.settings.mcp)) {
+        next.settings.mcp = normalizedMcpSettings;
         changed = true;
       }
     }

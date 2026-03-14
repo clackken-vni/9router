@@ -22,6 +22,16 @@ function buildEmptyPostBodyResponse() {
   });
 }
 
+function logRequestClosed(requestInfo, startTime, extra = {}) {
+  const duration = Date.now() - startTime;
+  logInternalApi.requestClosed({
+    method: requestInfo?.internalMethod || "(none)",
+    path: requestInfo?.path || "/",
+    duration: `${duration}ms`,
+    ...extra,
+  });
+}
+
 export async function handleInternalApiRequest(request, params = {}) {
   const startTime = Date.now();
 
@@ -29,6 +39,7 @@ export async function handleInternalApiRequest(request, params = {}) {
     const auth = await validate(request);
     if (!auth.ok) {
       logInternalApi.error({ error: "Unauthorized", status: 401 });
+      logRequestClosed(null, startTime, { status: 401, source: "auth_failed" });
       return auth.error;
     }
 
@@ -48,6 +59,7 @@ export async function handleInternalApiRequest(request, params = {}) {
         duration: `${duration}ms`,
         source: "skipped_empty_post_body",
       });
+      logRequestClosed(requestInfo, startTime, { status: response.status, source: "skipped_empty_post_body" });
       return response;
     }
 
@@ -63,6 +75,7 @@ export async function handleInternalApiRequest(request, params = {}) {
         duration: `${duration}ms`,
         source: "overwrite",
       });
+      logRequestClosed(requestInfo, startTime, { status: response.status, source: "overwrite", overrideKey: override.key });
       return response;
     }
 
@@ -84,10 +97,12 @@ export async function handleInternalApiRequest(request, params = {}) {
       duration: `${duration}ms`,
       source: "upstream",
     });
+    logRequestClosed(requestInfo, startTime, { status: response.status, source: "upstream" });
 
     return response;
   } catch (error) {
     logInternalApi.error({ error: error.message, stack: error.stack });
+    logRequestClosed(null, startTime, { status: 500, source: "internal_error", error: error.message });
     return fail(500, "internal_error", error.message || "Internal API request failed");
   }
 }

@@ -83,6 +83,10 @@ export const logInternalApi = {
   response(responseInfo) {
     writeLog("INFO", "RESPONSE", "Response sent", responseInfo);
   },
+
+  requestClosed(closeInfo) {
+    writeLog("INFO", "REQUEST_CLOSED", "Request closed", closeInfo);
+  },
   
   error(errorInfo) {
     writeLog("ERROR", "ERROR", "Error occurred", errorInfo);
