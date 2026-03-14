@@ -2,9 +2,18 @@ const https = require("https");
 const fs = require("fs");
 const path = require("path");
 const dns = require("dns");
+const crypto = require("crypto");
 const { promisify } = require("util");
 
 const INTERNAL_REQUEST_HEADER = { name: "x-request-source", value: "local" };
+const CORRELATION_HEADERS = {
+  sessionId: "x-9router-session-id",
+  traceId: "x-9router-trace-id",
+  spanId: "x-9router-span-id",
+  parentSpanId: "x-9router-parent-span-id",
+};
+
+const AMP_OBS_DIR = path.join(__dirname, "../../logs/amp-sessions");
 
 // All intercepted domains across all tools
 const TARGET_HOSTS = [
@@ -95,6 +104,99 @@ const COPILOT_URL_PATTERNS = ["/chat/completions", "/v1/messages", "/responses"]
 const LOG_DIR = path.join(__dirname, "../../logs/mitm");
 if (ENABLE_FILE_LOG && !fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
 
+function newId(prefix) {
+  return `${prefix}_${crypto.randomUUID().replace(/-/g, "")}`;
+}
+
+function sanitizeHeaders(headers = {}) {
+  const out = {};
+  for (const [key, val] of Object.entries(headers || {})) {
+    if (/(authorization|cookie|token|api-key|password|secret)/i.test(key)) {
+      out[key] = "[REDACTED]";
+      continue;
+    }
+    out[key] = String(val).length > 300 ? `${String(val).slice(0, 300)}...[truncated]` : val;
+  }
+  return out;
+}
+
+function sanitizeBodyBuffer(buffer) {
+  if (!buffer || !buffer.length) return undefined;
+  const raw = buffer.toString();
+  if (raw.length > 2000) {
+    return {
+      preview: raw.slice(0, 2000),
+      size: raw.length,
+      sha256: crypto.createHash("sha256").update(raw).digest("hex"),
+      truncated: true,
+    };
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function resolveCorrelationFromReq(req) {
+  const headers = req.headers || {};
+  const session_id = headers[CORRELATION_HEADERS.sessionId] || newId("sess");
+  const trace_id = headers[CORRELATION_HEADERS.traceId] || newId("tr");
+  const parent_span_id = headers[CORRELATION_HEADERS.spanId] || headers[CORRELATION_HEADERS.parentSpanId] || null;
+  const span_id = newId("sp");
+  return { session_id, trace_id, parent_span_id, span_id };
+}
+
+function resolveSessionLogPath(sessionId) {
+  const now = new Date();
+  const day = now.toISOString().slice(0, 10);
+  const startedAt = now.toISOString().replace(/[:.]/g, "-");
+  const dir = path.join(AMP_OBS_DIR, day);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, `${startedAt}__${sessionId}.jsonl`);
+}
+
+const mitmSessionPaths = new Map();
+function getSessionLogPath(sessionId) {
+  if (mitmSessionPaths.has(sessionId)) return mitmSessionPaths.get(sessionId);
+  const p = resolveSessionLogPath(sessionId);
+  mitmSessionPaths.set(sessionId, p);
+  return p;
+}
+
+function emitMitmEvent(context, payload = {}) {
+  try {
+    const filePath = getSessionLogPath(context.session_id);
+    const line = {
+      timestamp: new Date().toISOString(),
+      session_id: context.session_id,
+      trace_id: context.trace_id,
+      span_id: payload.span_id || context.span_id || newId("sp"),
+      parent_span_id: payload.parent_span_id || context.parent_span_id || null,
+      event: payload.event,
+      status: payload.status || "ok",
+      component: "mitm.server",
+      source: payload.source || "mitm",
+      model: payload.model,
+      tool: payload.tool,
+      io: payload.io,
+      timing: payload.timing,
+      error: payload.error,
+      meta: payload.meta,
+    };
+    fs.appendFileSync(filePath, `${JSON.stringify(line)}\n`, "utf8");
+  } catch {}
+}
+
+function createChildContext(parentContext = {}) {
+  return {
+    session_id: parentContext.session_id || newId("sess"),
+    trace_id: parentContext.trace_id || newId("tr"),
+    parent_span_id: parentContext.span_id || null,
+    span_id: newId("sp"),
+  };
+}
+
 function saveRequestLog(url, bodyBuffer) {
   if (!ENABLE_FILE_LOG) return;
   try {
@@ -180,9 +282,26 @@ function getToolForHost(host) {
   return null;
 }
 
-async function passthrough(req, res, bodyBuffer) {
+async function passthrough(req, res, bodyBuffer, context = {}) {
+  const startAt = Date.now();
   const targetHost = (req.headers.host || TARGET_HOSTS[0]).split(":")[0];
   const targetIP = await resolveTargetIP(targetHost);
+
+  emitMitmEvent(context, {
+    event: "mitm.intercept.passthrough",
+    source: "mitm",
+    tool: { name: getToolForHost(req.headers.host) || "unknown" },
+    io: {
+      input: {
+        method: req.method,
+        host: req.headers.host,
+        url: req.url,
+        headers: sanitizeHeaders(req.headers),
+        body: sanitizeBodyBuffer(bodyBuffer),
+      },
+    },
+    meta: { target_host: targetHost, target_ip: targetIP },
+  });
 
   const forwardReq = https.request({
     hostname: targetIP,
@@ -193,11 +312,27 @@ async function passthrough(req, res, bodyBuffer) {
     servername: targetHost,
     rejectUnauthorized: false
   }, (forwardRes) => {
+    emitMitmEvent(context, {
+      event: "mitm.intercept.end",
+      source: "mitm",
+      tool: { name: getToolForHost(req.headers.host) || "unknown" },
+      timing: { duration_ms: Date.now() - startAt },
+      meta: { mode: "passthrough", status_code: forwardRes.statusCode || 200 },
+    });
     res.writeHead(forwardRes.statusCode, forwardRes.headers);
     forwardRes.pipe(res);
   });
 
   forwardReq.on("error", (err) => {
+    emitMitmEvent(context, {
+      event: "mitm.intercept.error",
+      status: "error",
+      source: "mitm",
+      tool: { name: getToolForHost(req.headers.host) || "unknown" },
+      timing: { duration_ms: Date.now() - startAt },
+      error: { message: err.message },
+      meta: { mode: "passthrough" },
+    });
     console.error(`❌ Passthrough error: ${err.message}`);
     if (!res.headersSent) res.writeHead(502);
     res.end("Bad Gateway");
@@ -207,31 +342,52 @@ async function passthrough(req, res, bodyBuffer) {
   forwardReq.end();
 }
 
-async function intercept(req, res, bodyBuffer, mappedModel) {
+async function intercept(req, res, bodyBuffer, mappedModel, context = {}) {
+  const startAt = Date.now();
   try {
     const body = JSON.parse(bodyBuffer.toString());
 
-    // For Gemini-style endpoints, infer streaming mode from URL action suffix.
-    // This matches original behavior where Antigravity requests are treated as streaming
-    // when hitting :streamGenerateContent.
     if (req.url.includes(":streamGenerateContent")) {
       body.stream = true;
     }
 
-    // Route /responses requests to the Responses API endpoint so the translator
-    // converts the response back to Responses API SSE format (not Chat Completions SSE).
     const isResponsesApi = req.url.includes("/responses");
     const routerUrl = isResponsesApi ? ROUTER_RESPONSES_URL : ROUTER_CHAT_URL;
 
     console.log("[MITM Server] Request stream mode:", body.stream);
     body.model = mappedModel;
 
+    const downstreamHeaders = {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${API_KEY}`,
+      [CORRELATION_HEADERS.sessionId]: context.session_id,
+      [CORRELATION_HEADERS.traceId]: context.trace_id,
+      [CORRELATION_HEADERS.parentSpanId]: context.span_id,
+      [CORRELATION_HEADERS.spanId]: newId("sp"),
+    };
+
+    emitMitmEvent(context, {
+      event: "mitm.intercept.forward",
+      source: "mitm",
+      model: { raw: mappedModel },
+      tool: { name: getToolForHost(req.headers.host) || "unknown" },
+      io: {
+        input: {
+          original_model: extractModel(req.url, bodyBuffer),
+          mapped_model: mappedModel,
+          stream: !!body.stream,
+          body: sanitizeBodyBuffer(Buffer.from(JSON.stringify(body))),
+        },
+      },
+      meta: {
+        target_host: req.headers.host,
+        router_url: routerUrl,
+      },
+    });
+
     const response = await fetch(routerUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${API_KEY}`
-      },
+      headers: downstreamHeaders,
       body: JSON.stringify(body)
     });
 
@@ -248,14 +404,35 @@ async function intercept(req, res, bodyBuffer, mappedModel) {
     if (ct.includes("text/event-stream")) resHeaders["X-Accel-Buffering"] = "no";
     res.writeHead(200, resHeaders);
 
+    let streamedBytes = 0;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     while (true) {
       const { done, value } = await reader.read();
       if (done) { res.end(); break; }
+      streamedBytes += value?.byteLength || 0;
       res.write(decoder.decode(value, { stream: true }));
     }
+
+    emitMitmEvent(context, {
+      event: "mitm.intercept.end",
+      source: "mitm",
+      model: { raw: mappedModel },
+      tool: { name: getToolForHost(req.headers.host) || "unknown" },
+      timing: { duration_ms: Date.now() - startAt },
+      meta: { mode: "intercept", status_code: response.status, streamed_bytes: streamedBytes },
+    });
   } catch (error) {
+    emitMitmEvent(context, {
+      event: "mitm.intercept.error",
+      status: "error",
+      source: "mitm",
+      model: { raw: mappedModel || null },
+      tool: { name: getToolForHost(req.headers.host) || "unknown" },
+      timing: { duration_ms: Date.now() - startAt },
+      error: { message: error.message },
+      meta: { mode: "intercept" },
+    });
     console.error(`❌ ${error.message}`);
     if (!res.headersSent) res.writeHead(500, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: { message: error.message, type: "mitm_error" } }));
@@ -281,23 +458,37 @@ async function intercept(req, res, bodyBuffer, mappedModel) {
       return;
     }
 
+    const baseContext = resolveCorrelationFromReq(req);
+    emitMitmEvent(baseContext, {
+      event: "mitm.intercept.start",
+      source: "mitm",
+      tool: { name: getToolForHost(req.headers.host) || "unknown" },
+      io: {
+        input: {
+          method: req.method,
+          host: req.headers.host,
+          url: req.url,
+          headers: sanitizeHeaders(req.headers),
+        },
+      },
+      meta: { internal_request: req.headers[INTERNAL_REQUEST_HEADER.name] === INTERNAL_REQUEST_HEADER.value },
+    });
+
     const bodyBuffer = await collectBodyRaw(req);
     if (bodyBuffer.length > 0) saveRequestLog(req.url, bodyBuffer);
 
-    // Anti-loop: requests originating from 9Router bypass interception
     if (req.headers[INTERNAL_REQUEST_HEADER.name] === INTERNAL_REQUEST_HEADER.value) {
-      return passthrough(req, res, bodyBuffer);
+      return passthrough(req, res, bodyBuffer, createChildContext(baseContext));
     }
 
     const tool = getToolForHost(req.headers.host);
-    if (!tool) return passthrough(req, res, bodyBuffer);
+    if (!tool) return passthrough(req, res, bodyBuffer, createChildContext(baseContext));
 
-    // Check if this URL should be intercepted based on tool
     const isChat = tool === "antigravity"
       ? ANTIGRAVITY_URL_PATTERNS.some(p => req.url.includes(p))
       : COPILOT_URL_PATTERNS.some(p => req.url.includes(p));
 
-    if (!isChat) return passthrough(req, res, bodyBuffer);
+    if (!isChat) return passthrough(req, res, bodyBuffer, createChildContext(baseContext));
 
     const model = extractModel(req.url, bodyBuffer);
     console.log("[MITM Server] Extracted model:", model);
@@ -306,11 +497,11 @@ async function intercept(req, res, bodyBuffer, mappedModel) {
 
     if (!mappedModel) {
       console.log("[MITM Server] No mapping found, using passthrough");
-      return passthrough(req, res, bodyBuffer);
+      return passthrough(req, res, bodyBuffer, createChildContext(baseContext));
     }
 
     console.log("[MITM Server] Intercepting request, replacing model:", model, "→", mappedModel);
-    return intercept(req, res, bodyBuffer, mappedModel);
+    return intercept(req, res, bodyBuffer, mappedModel, createChildContext(baseContext));
   });
 
   server.listen(LOCAL_PORT, () => {
