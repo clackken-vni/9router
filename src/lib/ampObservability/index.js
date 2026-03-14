@@ -1,5 +1,4 @@
 import { resolveCorrelation, createSpanContext, childSpan } from "@/lib/ampObservability/session";
-import { ensureSettingsLoaded } from "@/lib/settingsCache";
 import { getCorrelationHeaders } from "@/lib/ampObservability/schema";
 import {
   normalizeError,
@@ -25,7 +24,6 @@ export {
   summarizeHeaders,
 };
 
-ensureSettingsLoaded().catch(() => {});
 ensureFlushHooks();
 
 export async function emitEvent(payload, options = {}) {

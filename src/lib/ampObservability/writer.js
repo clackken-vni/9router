@@ -2,7 +2,6 @@ import fs from "fs";
 import path from "path";
 import zlib from "zlib";
 import { promisify } from "util";
-import { getSettingsSnapshot } from "@/lib/localDb";
 import { getDatePathPart, getHourBucketInfo, getNowIso } from "@/lib/ampObservability/helpers";
 import { normalizeEvent } from "@/lib/ampObservability/schema";
 import { redactPayload } from "@/lib/ampObservability/redact";
@@ -15,12 +14,6 @@ const DEFAULT_GZ_RETENTION_DAYS = Number(process.env.AMP_OBS_GZ_RETENTION_DAYS |
 const DEFAULT_COMPRESS_THRESHOLD_BYTES = Number(process.env.AMP_OBS_COMPRESS_THRESHOLD_BYTES || 5 * 1024 * 1024);
 const DEFAULT_MAINTENANCE_INTERVAL_MS = Number(process.env.AMP_OBS_MAINTENANCE_INTERVAL_MS || 6 * 60 * 60 * 1000);
 const MAX_RAW_FILES_PER_DAY = 24;
-
-function isAmpSessionLoggingEnabled() {
-  if (process.env.ENABLE_REQUEST_LOGS !== "true") return false;
-  const settings = getSettingsSnapshot();
-  return settings?.ampSessionLogsEnabled !== false;
-}
 
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -86,10 +79,6 @@ async function enforceDailyRawCap(dayDir) {
 }
 
 export async function writeEvent(event, options = {}) {
-  if (!isAmpSessionLoggingEnabled()) {
-    return { filePath: null, event: null, skipped: true };
-  }
-
   const normalized = normalizeEvent({
     ...event,
     timestamp: event?.timestamp || getNowIso(),

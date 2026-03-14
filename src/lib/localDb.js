@@ -158,8 +158,6 @@ const defaultData = {
     stickyRoundRobinLimit: 3,
     requireLogin: true,
     observabilityEnabled: true,
-    ampSessionLogsEnabled: true,
-    internalApiLogsEnabled: true,
     observabilityMaxRecords: 1000,
     observabilityBatchSize: 20,
     observabilityFlushIntervalMs: 5000,
@@ -193,8 +191,6 @@ function cloneDefaultData() {
       stickyRoundRobinLimit: 3,
       requireLogin: true,
       observabilityEnabled: true,
-      ampSessionLogsEnabled: true,
-      internalApiLogsEnabled: true,
       observabilityMaxRecords: 1000,
       observabilityBatchSize: 20,
       observabilityFlushIntervalMs: 5000,
@@ -284,8 +280,8 @@ function ensureDbShape(data) {
   return { data: next, changed };
 }
 
+// Singleton instance
 let dbInstance = null;
-let settingsCache = null;
 
 /**
  * Get database instance (singleton)
@@ -325,12 +321,10 @@ export async function getDb() {
   // Initialize/migrate missing keys for older DB schema versions.
   if (!dbInstance.data) {
     dbInstance.data = cloneDefaultData();
-    settingsCache = dbInstance.data.settings;
     await dbInstance.write();
   } else {
     const { data, changed } = ensureDbShape(dbInstance.data);
     dbInstance.data = data;
-    settingsCache = dbInstance.data.settings;
     if (changed) {
       await dbInstance.write();
     }
@@ -918,15 +912,7 @@ export async function cleanupProviderConnections() {
  */
 export async function getSettings() {
   const db = await getDb();
-  if (!isCloud) {
-    await db.read();
-  }
-  settingsCache = db.data.settings || { cloudEnabled: false };
-  return settingsCache;
-}
-
-export function getSettingsSnapshot() {
-  return settingsCache;
+  return db.data.settings || { cloudEnabled: false };
 }
 
 /**
@@ -934,14 +920,10 @@ export function getSettingsSnapshot() {
  */
 export async function updateSettings(updates) {
   const db = await getDb();
-  if (!isCloud) {
-    await db.read();
-  }
   db.data.settings = {
     ...db.data.settings,
     ...updates
   };
-  settingsCache = db.data.settings;
   await db.write();
   return db.data.settings;
 }
