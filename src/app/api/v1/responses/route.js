@@ -51,6 +51,12 @@ function wrapStreamResponse(response, streamContext, startMs) {
         source: "route",
         timing: buildTiming(startMs, { stream: true, streamed_bytes: streamContext.streamed_bytes }),
       });
+      await emitLifecycleEnd(createSpanContext(streamContext), {
+        event: "session.end",
+        component: "api.v1.responses",
+        source: "route",
+        timing: buildTiming(startMs, { stream: true, streamed_bytes: streamContext.streamed_bytes }),
+      });
     },
   });
 
@@ -133,6 +139,13 @@ export async function POST(request) {
       meta: { status_code: response.status },
       timing: buildTiming(startMs, { stream: false }),
     });
+    await emitLifecycleEnd(createSpanContext(sessionContext), {
+      event: "session.end",
+      component: "api.v1.responses",
+      source: "route",
+      meta: { status_code: response.status },
+      timing: buildTiming(startMs, { stream: false }),
+    });
 
     return response;
   } catch (error) {
@@ -141,6 +154,12 @@ export async function POST(request) {
       component: "api.v1.responses",
       source: "route",
       model: extractModelMeta(body),
+      timing: buildTiming(startMs),
+    });
+    await emitLifecycleError(createSpanContext(sessionContext), error, {
+      event: "session.end",
+      component: "api.v1.responses",
+      source: "route",
       timing: buildTiming(startMs),
     });
     throw error;
