@@ -89,6 +89,7 @@ export function createStreamController({ onDisconnect, onError, log, provider, m
 export function createDisconnectAwareStream(transformStream, streamController) {
   const reader = transformStream.readable.getReader();
   const writer = transformStream.writable.getWriter();
+  let hasSentBytes = false;
 
   return new ReadableStream({
     async pull(controller) {
@@ -104,9 +105,14 @@ export function createDisconnectAwareStream(transformStream, streamController) {
           controller.close();
           return;
         }
+        hasSentBytes = true;
         controller.enqueue(value);
       } catch (error) {
         streamController.handleError(error);
+        if (hasSentBytes) {
+          controller.close();
+          return;
+        }
         controller.error(error);
       }
     },
