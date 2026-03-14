@@ -20,6 +20,17 @@ export function getDatePathPart(date = new Date()) {
   return date.toISOString().slice(0, 10);
 }
 
+export function getHourBucketInfo(date = new Date()) {
+  const d = new Date(date);
+  const hour = d.getUTCHours();
+  const start = String(hour).padStart(2, "0");
+  return {
+    day: getDatePathPart(d),
+    hour,
+    fileName: `${start}.jsonl`,
+  };
+}
+
 export function getStartedAtStamp(date = new Date()) {
   return date.toISOString().replace(/[:.]/g, "-");
 }
