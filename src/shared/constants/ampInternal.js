@@ -74,6 +74,43 @@ export const AMP_INTERNAL_OVERRIDE_DEFINITIONS = [
     },
   },
   {
+    key: "webSearch2",
+    label: "webSearch2",
+    httpMethod: "POST",
+    path: "/",
+    internalMethod: "webSearch2",
+    description: "Kết quả web search nội bộ của Amp CLI",
+    defaultResponse: {
+      ok: true,
+      result: {
+        objective: "",
+        searchQueries: [],
+        maxResults: 0,
+        provider: "override",
+        results: [],
+        totalResults: 0,
+        fetchedAt: new Date().toISOString(),
+      },
+    },
+  },
+  {
+    key: "extractWebPageContent",
+    label: "extractWebPageContent",
+    httpMethod: "POST",
+    path: "/",
+    internalMethod: "extractWebPageContent",
+    description: "Trích xuất nội dung trang web nội bộ của Amp CLI",
+    defaultResponse: {
+      ok: true,
+      result: {
+        url: "",
+        title: "",
+        content: "",
+        fetchedAt: new Date().toISOString(),
+      },
+    },
+  },
+  {
     key: "github-auth-status",
     label: "github-auth-status",
     httpMethod: "GET",
