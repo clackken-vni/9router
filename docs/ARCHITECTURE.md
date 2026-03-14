@@ -207,6 +207,36 @@ sequenceDiagram
     Stream->>Usage: extract usage + persist history/log
 ```
 
+## Observability Data-Flow Wireframe (Request Lineage)
+
+```mermaid
+flowchart TD
+    A[Ingress /v1 or /api/internal] --> B[Route handler]
+    B --> C[request.received]
+    C --> D[auth guard and settings]
+    D --> E[input normalization and translation]
+    E --> F[model resolve and routing]
+    F --> G[tool or provider execution]
+    G --> H{success}
+    H -->|yes| I[response transform]
+    I --> J{stream}
+    J -->|yes| K[stream.chunk*]
+    K --> L[request.responded]
+    J -->|no| L
+    H -->|no| M[fallback retry]
+    M --> G
+    M --> N[request.failed]
+    L --> O[(logs/amp-sessions jsonl)]
+    N --> O
+```
+
+Node mapping:
+
+- Request lifecycle wrapper: `src/lib/ampObservability/http.js`
+- Chat/responses/messages stream events: `src/app/api/v1/chat/completions/route.js`, `src/app/api/v1/responses/route.js`, `src/app/api/v1/messages/route.js`
+- Internal tool lifecycle: `src/lib/internalApi/handler.js`, `src/lib/internalApi/proxyToUpstream.js`
+- Event storage/query: `src/lib/ampObservability/writer.js`, `src/lib/ampObservability/reader.js`, `src/app/api/observability/route.js`
+
 ## Combo + Account Fallback Flow
 
 ```mermaid
@@ -519,6 +549,23 @@ Runtime visibility sources:
 - textual request status log in `log.txt`
 - optional deep request/translation logs under `logs/` when `ENABLE_REQUEST_LOGS=true`
 - dashboard usage endpoints (`/api/usage/*`) for UI consumption
+
+### Observability Verification Matrix
+
+| Scenario | Expected chain | Verification target |
+|---|---|---|
+| Compatibility non-stream request | `request.received` → `request.responded` | `/v1`, `/v1/models`, `/v1/messages/count_tokens` |
+| Compatibility stream request | `request.received` → `stream.chunk*` → `request.responded` | `/v1/chat/completions`, `/v1/responses`, `/v1/messages` |
+| Internal tool lifecycle | `request.received` + `tool.call.start/forwarded/result/end` | `/api/internal/[...path]` + upstream/local handler |
+| Error path continuity | `request.failed` + normalized `error` | invalid payload, auth fail, upstream timeout |
+| Correlation continuity | same `request_id` + `trace_id` through same flow | observability query by IDs |
+| Redaction compliance | no raw secret/token in persisted event payloads | sample events in `logs/amp-sessions` |
+
+Pass criteria:
+- Completeness: mỗi flow có event bắt đầu/kết thúc (hoặc failed).
+- Continuity: `request_id` + `trace_id` nhất quán trong cùng trace.
+- Safety: payload nhạy cảm bị mask/truncate theo policy.
+- Operability: query API lọc được theo `request_id`, `route_id`, `tool_call_id`.
 
 ## Security-Sensitive Boundaries
 

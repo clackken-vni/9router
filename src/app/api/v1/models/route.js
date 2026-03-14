@@ -1,6 +1,11 @@
 import { PROVIDER_MODELS, PROVIDER_ID_TO_ALIAS } from "@/shared/constants/models";
 import { getProviderAlias } from "@/shared/constants/providers";
 import { getProviderConnections, getCombos } from "@/lib/localDb";
+import {
+  endRequestLifecycle,
+  failRequestLifecycle,
+  startRequestLifecycle,
+} from "@/lib/ampObservability";
 
 /**
  * Handle CORS preflight
@@ -19,7 +24,8 @@ export async function OPTIONS() {
  * GET /v1/models - OpenAI compatible models list
  * Returns models from all active providers and combos in OpenAI format
  */
-export async function GET() {
+export async function GET(request) {
+  const flow = await startRequestLifecycle(request, "api.v1.models");
   try {
     // Get active provider connections
     let connections = [];
@@ -136,7 +142,7 @@ export async function GET() {
       }
     }
 
-    return Response.json({
+    const response = Response.json({
       object: "list",
       data: models,
     }, {
@@ -144,8 +150,28 @@ export async function GET() {
         "Access-Control-Allow-Origin": "*",
       },
     });
+
+    await endRequestLifecycle(flow.requestContext, response, {
+      method: "GET",
+      path: "/v1/models",
+      startTime: flow.startTime,
+      io: {
+        output: {
+          models_count: models.length,
+          providers_count: activeConnectionByProvider.size,
+          combos_count: combos.length,
+        },
+      },
+    });
+
+    return response;
   } catch (error) {
     console.log("Error fetching models:", error);
+    await failRequestLifecycle(flow.requestContext, error, {
+      method: "GET",
+      path: "/v1/models",
+      startTime: flow.startTime,
+    });
     return Response.json(
       { error: { message: error.message, type: "server_error" } },
       { status: 500 }
