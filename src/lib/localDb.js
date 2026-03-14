@@ -918,6 +918,9 @@ export async function cleanupProviderConnections() {
  */
 export async function getSettings() {
   const db = await getDb();
+  if (!isCloud) {
+    await db.read();
+  }
   settingsCache = db.data.settings || { cloudEnabled: false };
   return settingsCache;
 }
@@ -931,6 +934,9 @@ export function getSettingsSnapshot() {
  */
 export async function updateSettings(updates) {
   const db = await getDb();
+  if (!isCloud) {
+    await db.read();
+  }
   db.data.settings = {
     ...db.data.settings,
     ...updates
