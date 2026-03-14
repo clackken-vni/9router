@@ -3,6 +3,7 @@ import { FORMATS } from "../translator/formats.js";
 import { trackPendingRequest, appendRequestLog } from "@/lib/usageDb.js";
 import { extractUsage, hasValidUsage, estimateUsage, logUsage, addBufferToUsage, filterUsageForFormat, COLORS } from "./usageTracking.js";
 import { parseSSELine, hasValuableContent, fixInvalidId, formatSSE } from "./streamHelpers.js";
+import { serializeEvent, drainEvents } from "../services/streamIntervention.js";
 
 export { COLORS, formatSSE };
 
@@ -43,7 +44,8 @@ export function createSSEStream(options = {}) {
     connectionId = null,
     body = null,
     onStreamComplete = null,
-    apiKey = null
+    apiKey = null,
+    interventionState = null
   } = options;
 
   let buffer = "";
@@ -92,6 +94,19 @@ export function createSSEStream(options = {}) {
     .sort((a, b) => a[0] - b[0])
     .map(([, tc]) => tc);
 
+  const enqueueInterventionEvents = (controller) => {
+    if (!interventionState) return;
+    const events = drainEvents(interventionState);
+    if (!events.length) return;
+
+    for (const event of events) {
+      const output = serializeEvent(event);
+      if (!output) continue;
+      reqLogger?.appendConvertedChunk?.(output);
+      controller.enqueue(sharedEncoder.encode(output));
+    }
+  };
+
   return new TransformStream({
     transform(chunk, controller) {
       if (!ttftAt) {
@@ -106,6 +121,7 @@ export function createSSEStream(options = {}) {
 
       for (const line of lines) {
         const trimmed = line.trim();
+        enqueueInterventionEvents(controller);
 
         // Passthrough mode: normalize and forward
         if (mode === STREAM_MODE.PASSTHROUGH) {
@@ -296,6 +312,7 @@ export function createSSEStream(options = {}) {
 
     flush(controller) {
       trackPendingRequest(model, provider, connectionId, false);
+      enqueueInterventionEvents(controller);
       try {
         const remaining = sharedDecoder.decode();
         if (remaining) buffer += remaining;
@@ -408,7 +425,7 @@ export function createSSEStream(options = {}) {
   });
 }
 
-export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, provider = null, reqLogger = null, toolNameMap = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null) {
+export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, provider = null, reqLogger = null, toolNameMap = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null, interventionState = null) {
   return createSSEStream({
     mode: STREAM_MODE.TRANSLATE,
     targetFormat,
@@ -420,11 +437,12 @@ export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, p
     connectionId,
     body,
     onStreamComplete,
-    apiKey
+    apiKey,
+    interventionState
   });
 }
 
-export function createPassthroughStreamWithLogger(provider = null, reqLogger = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null) {
+export function createPassthroughStreamWithLogger(provider = null, reqLogger = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null, interventionState = null) {
   return createSSEStream({
     mode: STREAM_MODE.PASSTHROUGH,
     provider,
@@ -433,6 +451,7 @@ export function createPassthroughStreamWithLogger(provider = null, reqLogger = n
     connectionId,
     body,
     onStreamComplete,
-    apiKey
+    apiKey,
+    interventionState
   });
 }

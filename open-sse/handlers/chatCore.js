@@ -15,6 +15,7 @@ import { buildRequestDetail, extractRequestConfig } from "./chatCore/requestDeta
 import { handleForcedSSEToJson } from "./chatCore/sseToJsonHandler.js";
 import { handleNonStreamingResponse } from "./chatCore/nonStreamingHandler.js";
 import { handleStreamingResponse, buildOnStreamComplete } from "./chatCore/streamingHandler.js";
+import { createState, queueEvent, STREAM_INTERVENTION_EVENT_TYPES } from "../services/streamIntervention.js";
 import { handleJsonToSSE } from "./chatCore/jsonToSseHandler.js";
 
 /**
@@ -66,6 +67,22 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     },
     onError: () => trackPendingRequest(model, provider, connectionId, false),
     log, provider, model
+  });
+
+  const streamInterventionState = createState({
+    request_id: connectionId,
+    provider,
+    model,
+    attempt: 1
+  });
+  queueEvent(streamInterventionState, {
+    type: STREAM_INTERVENTION_EVENT_TYPES.STATUS,
+    phase: "request.accepted",
+    data: {
+      source_format: sourceFormat,
+      target_format: targetFormat,
+      stream
+    }
   });
 
   // Execute request
@@ -166,7 +183,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   // Streaming response
   const { onStreamComplete } = buildOnStreamComplete({ ...sharedCtx });
-  return handleStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, streamController, onStreamComplete });
+  return handleStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, streamController, onStreamComplete, streamInterventionState });
 }
 
 export function isTokenExpiringSoon(expiresAt, bufferMs = 5 * 60 * 1000) {
