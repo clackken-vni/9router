@@ -15,26 +15,43 @@ const SEARCH_PROVIDER_PRESETS = [
 
 function normalizeSearchProvidersForm(searchProviders) {
   const baseProviders = Array.isArray(searchProviders?.providers) ? searchProviders.providers : [];
-  const providerMap = new Map(baseProviders.map((item) => [item.type, item]));
+  const presetByType = new Map(SEARCH_PROVIDER_PRESETS.map((preset) => [preset.type, preset]));
+  const includedTypes = new Set();
 
-  const orderedProviders = [
-    ...baseProviders.filter((item) => item?.type && !SEARCH_PROVIDER_PRESETS.some((preset) => preset.type === item.type)),
-    ...SEARCH_PROVIDER_PRESETS.map((preset) => {
-      const existing = providerMap.get(preset.type) || {};
-      return {
-        id: existing.id || preset.id,
-        type: preset.type,
-        name: preset.name,
-        enabled: existing.enabled === true,
-        apiKey: "",
-        hasApiKey: existing.hasApiKey === true,
-        maskedApiKey: existing.maskedApiKey || null,
-        monthlyQuota: Number.isInteger(existing.monthlyQuota) ? existing.monthlyQuota : 5000,
-        usage: existing.usage || {},
-        sync: existing.sync || {},
-      };
-    }),
-  ];
+  const orderedProviders = baseProviders.map((item) => {
+    const preset = presetByType.get(item?.type);
+    if (item?.type) {
+      includedTypes.add(item.type);
+    }
+    return {
+      id: item?.id || preset?.id || item?.type || "provider",
+      type: item?.type || preset?.type || "provider",
+      name: item?.name || preset?.name || item?.type || "Provider",
+      enabled: item?.enabled === true,
+      apiKey: "",
+      hasApiKey: item?.hasApiKey === true,
+      maskedApiKey: item?.maskedApiKey || null,
+      monthlyQuota: Number.isInteger(item?.monthlyQuota) ? item.monthlyQuota : 5000,
+      usage: item?.usage || {},
+      sync: item?.sync || {},
+    };
+  });
+
+  SEARCH_PROVIDER_PRESETS.forEach((preset) => {
+    if (includedTypes.has(preset.type)) return;
+    orderedProviders.push({
+      id: preset.id,
+      type: preset.type,
+      name: preset.name,
+      enabled: false,
+      apiKey: "",
+      hasApiKey: false,
+      maskedApiKey: null,
+      monthlyQuota: 5000,
+      usage: {},
+      sync: {},
+    });
+  });
 
   return {
     enabled: searchProviders?.enabled !== false,
@@ -72,6 +89,8 @@ export default function ProfilePage() {
   const [searchProvidersForm, setSearchProvidersForm] = useState(normalizeSearchProvidersForm(null));
   const [searchProvidersStatus, setSearchProvidersStatus] = useState({ type: "", message: "" });
   const [searchProvidersSaving, setSearchProvidersSaving] = useState(false);
+  const [draggedProviderIndex, setDraggedProviderIndex] = useState(null);
+  const [dragOverProviderIndex, setDragOverProviderIndex] = useState(null);
 
   useEffect(() => {
     fetch("/api/settings")
@@ -318,6 +337,40 @@ export default function ProfilePage() {
       [next[index], next[target]] = [next[target], next[index]];
       return { ...prev, providers: next };
     });
+  };
+
+  const handleSearchProviderDragStart = (event, index) => {
+    if (loading || searchProvidersSaving) {
+      event.preventDefault();
+      return;
+    }
+    event.dataTransfer.effectAllowed = "move";
+    setDraggedProviderIndex(index);
+    setDragOverProviderIndex(index);
+  };
+
+  const handleSearchProviderDragOver = (event, index) => {
+    event.preventDefault();
+    if (dragOverProviderIndex !== index) {
+      setDragOverProviderIndex(index);
+    }
+  };
+
+  const handleSearchProviderDrop = (index) => {
+    setSearchProvidersForm((prev) => {
+      if (draggedProviderIndex === null || draggedProviderIndex === index) return prev;
+      const next = [...prev.providers];
+      const [moved] = next.splice(draggedProviderIndex, 1);
+      next.splice(index, 0, moved);
+      return { ...prev, providers: next };
+    });
+    setDraggedProviderIndex(null);
+    setDragOverProviderIndex(null);
+  };
+
+  const clearSearchProviderDragState = () => {
+    setDraggedProviderIndex(null);
+    setDragOverProviderIndex(null);
   };
 
   const updateSearchProviderField = (index, key, value) => {
@@ -809,13 +862,25 @@ export default function ProfilePage() {
 
             <div className="flex flex-col gap-3 pt-2 border-t border-border/50">
               {searchProvidersForm.providers.map((provider, index) => (
-                <div key={provider.type} className="rounded-lg border border-border p-3 flex flex-col gap-3">
+                <div
+                  key={provider.type}
+                  className={cn(
+                    "rounded-lg border border-border p-3 flex flex-col gap-3",
+                    dragOverProviderIndex === index && draggedProviderIndex !== null ? "border-cyan-500/60 bg-cyan-500/5" : ""
+                  )}
+                  draggable={!loading && !searchProvidersSaving}
+                  onDragStart={(event) => handleSearchProviderDragStart(event, index)}
+                  onDragOver={(event) => handleSearchProviderDragOver(event, index)}
+                  onDrop={() => handleSearchProviderDrop(index)}
+                  onDragEnd={clearSearchProviderDragState}
+                >
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="font-medium">{provider.name}</p>
                       <p className="text-xs text-text-muted">Priority #{index + 1}</p>
                     </div>
                     <div className="flex items-center gap-2">
+                      <span className="material-symbols-outlined text-text-muted text-lg" title="Drag to reorder">drag_indicator</span>
                       <Button type="button" variant="outline" size="sm" onClick={() => moveSearchProvider(index, -1)} disabled={index === 0 || loading || searchProvidersSaving}>↑</Button>
                       <Button type="button" variant="outline" size="sm" onClick={() => moveSearchProvider(index, 1)} disabled={index === searchProvidersForm.providers.length - 1 || loading || searchProvidersSaving}>↓</Button>
                     </div>
@@ -851,7 +916,7 @@ export default function ProfilePage() {
 
                   <div className="text-xs text-text-muted flex flex-col gap-1">
                     <p>Usage: {provider.usage?.requestCount ?? 0} / {provider.monthlyQuota}</p>
-                    <p>Last sync: {provider.usage?.lastSyncedAt || "Never"}</p>
+                    <p>Last sync: {provider.sync?.lastSyncedAt || provider.usage?.lastSyncedAt || "Never"}</p>
                     <p>Secret: {provider.hasApiKey ? (provider.maskedApiKey || "Configured") : "Not configured"}</p>
                   </div>
                 </div>
