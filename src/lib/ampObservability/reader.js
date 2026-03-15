@@ -102,7 +102,8 @@ function matchesFilter(event, filters) {
 }
 
 export function queryObservabilityEvents(params = {}) {
-  const limit = Math.min(Math.max(Number(params.limit) || 100, 1), 500);
+  const requestedLimit = Number(params.limit);
+  const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.floor(requestedLimit) : 100;
   const filters = {
     day: params.day || "",
     from: parseDate(params.from),
