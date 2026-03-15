@@ -189,7 +189,7 @@ export default function ObservabilityClient() {
               />
             </div>
           ))}
-          <Input label="Limit" type="number" min="1" max="500" value={filters.limit} onChange={applyField("limit")} />
+          <Input label="Limit" type="number" min="1" value={filters.limit} onChange={applyField("limit")} />
         </div>
         <div className="flex flex-wrap gap-2 mt-4">
           <Button variant="primary" icon="filter_alt" onClick={fetchData} loading={loading}>Apply</Button>
