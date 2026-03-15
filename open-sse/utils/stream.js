@@ -3,6 +3,9 @@ import { FORMATS } from "../translator/formats.js";
 import { trackPendingRequest, appendRequestLog } from "@/lib/usageDb.js";
 import { extractUsage, hasValidUsage, estimateUsage, logUsage, addBufferToUsage, filterUsageForFormat, COLORS } from "./usageTracking.js";
 import { parseSSELine, hasValuableContent, fixInvalidId, formatSSE } from "./streamHelpers.js";
+import { serializeEvent, drainEvents, queueEvent, markTerminal, STREAM_INTERVENTION_EVENT_TYPES } from "../services/streamIntervention.js";
+import { resolveToolInterceptionPolicy, interceptToolCalls } from "../services/toolInterception.js";
+import { getCompleteToolCalls } from "../translator/helpers/toolCallHelper.js";
 
 export { COLORS, formatSSE };
 
@@ -43,20 +46,26 @@ export function createSSEStream(options = {}) {
     connectionId = null,
     body = null,
     onStreamComplete = null,
-    apiKey = null
+    apiKey = null,
+    interventionState = null
   } = options;
 
   let buffer = "";
   let usage = null;
 
   const state = mode === STREAM_MODE.TRANSLATE ? { ...initState(sourceFormat), provider, toolNameMap, model } : null;
+  const interceptionPolicy = resolveToolInterceptionPolicy(body);
+  const interceptedToolCallIds = new Set();
 
   let totalContentLength = 0;
   let accumulatedContent = "";
   let accumulatedThinking = "";
   let ttftAt = null;
+  let hasSentDoneMarker = false;
+  let hasStreamErrorEvent = false;
   let hasSeenSSEData = false; // Track if we've seen valid SSE data events
   const accumulatedToolCalls = new Map();
+  let pendingNamedEvent = null;
 
   const mergeToolCalls = (toolCalls) => {
     if (!Array.isArray(toolCalls)) return;
@@ -92,20 +101,129 @@ export function createSSEStream(options = {}) {
     .sort((a, b) => a[0] - b[0])
     .map(([, tc]) => tc);
 
-  return new TransformStream({
-    transform(chunk, controller) {
-      if (!ttftAt) {
-        ttftAt = Date.now();
+  const enqueueInterventionEvents = (controller) => {
+    if (!interventionState) return;
+    const events = drainEvents(interventionState);
+    if (!events.length) return;
+
+    for (const event of events) {
+      const output = serializeEvent(event);
+      if (!output) continue;
+      reqLogger?.appendConvertedChunk?.(output);
+      controller.enqueue(sharedEncoder.encode(output));
+    }
+  };
+
+  const emitDoneMarker = (controller) => {
+    if (hasSentDoneMarker) return;
+
+    if (sourceFormat !== FORMATS.OPENAI_RESPONSES) {
+      const doneOutput = "data: [DONE]\n\n";
+      reqLogger?.appendConvertedChunk?.(doneOutput);
+      controller.enqueue(sharedEncoder.encode(doneOutput));
+    }
+
+    hasSentDoneMarker = true;
+  };
+
+  const emitStreamError = (controller, error) => {
+    if (!interventionState || hasStreamErrorEvent) return;
+
+    queueEvent(interventionState, {
+      type: STREAM_INTERVENTION_EVENT_TYPES.ERROR,
+      phase: "stream.error",
+      provider,
+      model,
+      attempt: interventionState.context?.attempt || 1,
+      data: {
+        message: error?.message || "stream_transform_error"
       }
-      const text = sharedDecoder.decode(chunk, { stream: true });
-      buffer += text;
-      reqLogger?.appendProviderChunk?.(text);
+    });
 
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
+    markTerminal(interventionState, {
+      type: STREAM_INTERVENTION_EVENT_TYPES.STATUS,
+      phase: "stream.done",
+      provider,
+      model,
+      attempt: interventionState.context?.attempt || 1,
+      data: {
+        provider_attempts: interventionState.context?.provider_attempts || []
+      }
+    });
 
-      for (const line of lines) {
+    hasStreamErrorEvent = true;
+    enqueueInterventionEvents(controller);
+  };
+
+  const processToolInterception = async (controller, finishReason = null) => {
+    if (!interventionState || !interceptionPolicy.enabled) return;
+    if (finishReason && finishReason !== "tool_calls") return;
+
+    const completeToolCalls = getCompleteToolCalls(getToolCalls())
+      .filter((tc) => !interceptedToolCallIds.has(tc.id));
+    if (!completeToolCalls.length) return;
+
+    await interceptToolCalls({
+      toolCalls: completeToolCalls,
+      policy: interceptionPolicy,
+      queueEvent: (eventInput) => queueEvent(interventionState, eventInput),
+      context: {
+        provider,
+        model,
+        attempt: interventionState.context?.attempt || 1
+      }
+    });
+
+    for (const tc of completeToolCalls) {
+      interceptedToolCallIds.add(tc.id);
+    }
+
+    enqueueInterventionEvents(controller);
+  };
+
+  return new TransformStream({
+    async transform(chunk, controller) {
+      try {
+        if (!ttftAt) {
+          ttftAt = Date.now();
+        }
+        const text = sharedDecoder.decode(chunk, { stream: true });
+        buffer += text;
+        reqLogger?.appendProviderChunk?.(text);
+
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
         const trimmed = line.trim();
+        enqueueInterventionEvents(controller);
+
+        if (trimmed.startsWith("event:")) {
+          pendingNamedEvent = trimmed.slice(6).trim();
+          if (mode === STREAM_MODE.PASSTHROUGH) {
+            const output = line + "\n";
+            reqLogger?.appendConvertedChunk?.(output);
+            controller.enqueue(sharedEncoder.encode(output));
+          }
+          continue;
+        }
+
+        if (pendingNamedEvent && pendingNamedEvent.startsWith("amp.") && trimmed.startsWith("data:")) {
+          try {
+            const payload = JSON.parse(trimmed.slice(5).trim());
+            if (payload && typeof payload === "object") {
+              payload.type = pendingNamedEvent;
+              const output = serializeEvent(payload);
+              if (output) {
+                reqLogger?.appendConvertedChunk?.(output);
+                controller.enqueue(sharedEncoder.encode(output));
+              }
+              pendingNamedEvent = null;
+              continue;
+            }
+          } catch { }
+          pendingNamedEvent = null;
+        }
 
         // Passthrough mode: normalize and forward
         if (mode === STREAM_MODE.PASSTHROUGH) {
@@ -165,6 +283,9 @@ export function createSSEStream(options = {}) {
               }
 
               const isFinishChunk = parsed.choices?.[0]?.finish_reason;
+              if (isFinishChunk) {
+                await processToolInterception(controller, isFinishChunk);
+              }
               if (isFinishChunk && !hasValidUsage(parsed.usage)) {
                 const estimated = estimateUsage(body, totalContentLength, FORMATS.OPENAI);
                 parsed.usage = filterUsageForFormat(estimated, FORMATS.OPENAI);
@@ -204,11 +325,7 @@ export function createSSEStream(options = {}) {
 
         if (parsed && parsed.done) {
           // Responses API SSE does not use [DONE] sentinel — stream ends after response.completed
-          if (sourceFormat !== FORMATS.OPENAI_RESPONSES) {
-            const output = "data: [DONE]\n\n";
-            reqLogger?.appendConvertedChunk?.(output);
-            controller.enqueue(sharedEncoder.encode(output));
-          }
+          emitDoneMarker(controller);
           continue;
         }
 
@@ -276,6 +393,10 @@ export function createSSEStream(options = {}) {
 
             // Inject estimated usage if finish chunk has no valid usage
             const isFinishChunk = item.type === "message_delta" || item.choices?.[0]?.finish_reason;
+            const finishReason = item.choices?.[0]?.finish_reason || (item.type === "message_delta" ? state.finishReason : null);
+            if (isFinishChunk) {
+              await processToolInterception(controller, finishReason);
+            }
             if (state.finishReason && isFinishChunk && !hasValidUsage(item.usage) && totalContentLength > 0) {
               const estimated = estimateUsage(body, totalContentLength, sourceFormat);
               item.usage = filterUsageForFormat(estimated, sourceFormat); // Filter + already has buffer
@@ -292,13 +413,20 @@ export function createSSEStream(options = {}) {
           }
         }
       }
+      } catch (error) {
+        emitStreamError(controller, error);
+        emitDoneMarker(controller);
+      }
     },
 
-    flush(controller) {
+    async flush(controller) {
       trackPendingRequest(model, provider, connectionId, false);
+      enqueueInterventionEvents(controller);
       try {
         const remaining = sharedDecoder.decode();
         if (remaining) buffer += remaining;
+
+        await processToolInterception(controller, state?.finishReason || null);
 
         if (mode === STREAM_MODE.PASSTHROUGH) {
           if (buffer) {
@@ -324,9 +452,7 @@ export function createSSEStream(options = {}) {
           // This prevents mixing JSON responses with SSE terminators.
           // Some clients (e.g. OpenClaw) expect the OpenAI-style sentinel for true SSE streams.
           if (hasSeenSSEData) {
-            const doneOutput = "data: [DONE]\n\n";
-            reqLogger?.appendConvertedChunk?.(doneOutput);
-            controller.enqueue(sharedEncoder.encode(doneOutput));
+            emitDoneMarker(controller);
           }
 
           if (onStreamComplete) {
@@ -335,6 +461,7 @@ export function createSSEStream(options = {}) {
               thinking: accumulatedThinking,
               toolCalls: getToolCalls()
             }, usage, ttftAt);
+            enqueueInterventionEvents(controller);
           }
           return;
         }
@@ -379,11 +506,7 @@ export function createSSEStream(options = {}) {
         }
 
         // Responses API SSE does not use [DONE] sentinel — stream ends after response.completed
-        if (sourceFormat !== FORMATS.OPENAI_RESPONSES) {
-          const doneOutput = "data: [DONE]\n\n";
-          reqLogger?.appendConvertedChunk?.(doneOutput);
-          controller.enqueue(sharedEncoder.encode(doneOutput));
-        }
+        emitDoneMarker(controller);
 
         if (!hasValidUsage(state?.usage) && totalContentLength > 0) {
           state.usage = estimateUsage(body, totalContentLength, sourceFormat);
@@ -400,15 +523,17 @@ export function createSSEStream(options = {}) {
             content: accumulatedContent,
             thinking: accumulatedThinking
           }, state?.usage, ttftAt);
+          enqueueInterventionEvents(controller);
         }
       } catch (error) {
-        console.log("Error in flush:", error);
+        emitStreamError(controller, error);
+        emitDoneMarker(controller);
       }
     }
   });
 }
 
-export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, provider = null, reqLogger = null, toolNameMap = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null) {
+export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, provider = null, reqLogger = null, toolNameMap = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null, interventionState = null) {
   return createSSEStream({
     mode: STREAM_MODE.TRANSLATE,
     targetFormat,
@@ -420,11 +545,12 @@ export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, p
     connectionId,
     body,
     onStreamComplete,
-    apiKey
+    apiKey,
+    interventionState
   });
 }
 
-export function createPassthroughStreamWithLogger(provider = null, reqLogger = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null) {
+export function createPassthroughStreamWithLogger(provider = null, reqLogger = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null, interventionState = null) {
   return createSSEStream({
     mode: STREAM_MODE.PASSTHROUGH,
     provider,
@@ -433,6 +559,7 @@ export function createPassthroughStreamWithLogger(provider = null, reqLogger = n
     connectionId,
     body,
     onStreamComplete,
-    apiKey
+    apiKey,
+    interventionState
   });
 }

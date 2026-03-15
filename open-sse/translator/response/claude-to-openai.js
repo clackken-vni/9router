@@ -56,7 +56,8 @@ export function claudeToOpenAIResponse(chunk, state) {
           function: {
             name: toolName,
             arguments: ""
-          }
+          },
+          _amp_complete: false
         };
         state.toolCalls.set(chunk.index, toolCall);
         results.push(createChunk(state, { tool_calls: [toolCall] }));
@@ -97,6 +98,18 @@ export function claudeToOpenAIResponse(chunk, state) {
       if (state.inThinkingBlock && chunk.index === state.currentBlockIndex) {
         results.push(createChunk(state, { reasoning_content: "" }));
         state.inThinkingBlock = false;
+      }
+      const stoppedToolCall = state.toolCalls.get(chunk.index);
+      if (stoppedToolCall) {
+        stoppedToolCall._amp_complete = true;
+        results.push(createChunk(state, {
+          tool_calls: [{
+            index: stoppedToolCall.index,
+            id: stoppedToolCall.id,
+            function: { arguments: "" },
+            _amp_complete: true
+          }]
+        }));
       }
       state.textBlockStarted = false;
       state.thinkingBlockStarted = false;

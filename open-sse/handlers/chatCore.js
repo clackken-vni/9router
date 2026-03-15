@@ -15,6 +15,7 @@ import { buildRequestDetail, extractRequestConfig } from "./chatCore/requestDeta
 import { handleForcedSSEToJson } from "./chatCore/sseToJsonHandler.js";
 import { handleNonStreamingResponse } from "./chatCore/nonStreamingHandler.js";
 import { handleStreamingResponse, buildOnStreamComplete } from "./chatCore/streamingHandler.js";
+import { createState, queueEvent, STREAM_INTERVENTION_EVENT_TYPES } from "../services/streamIntervention.js";
 import { handleJsonToSSE } from "./chatCore/jsonToSseHandler.js";
 
 /**
@@ -24,7 +25,7 @@ import { handleJsonToSSE } from "./chatCore/jsonToSseHandler.js";
  * @param {object} options.credentials - Provider credentials
  * @param {string} options.sourceFormatOverride - Override detected source format (e.g. "openai-responses")
  */
-export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, sourceFormatOverride }) {
+export async function handleChatCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, clientRawRequest, connectionId, userAgent, apiKey, sourceFormatOverride, streamInterventionState = null }) {
   const { provider, model } = modelInfo;
   const requestStartTime = Date.now();
 
@@ -66,6 +67,27 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     },
     onError: () => trackPendingRequest(model, provider, connectionId, false),
     log, provider, model
+  });
+
+  const interventionState = streamInterventionState || createState({
+    request_id: connectionId,
+    provider,
+    model,
+    attempt: 1
+  });
+  interventionState.context.provider = provider;
+  interventionState.context.model = model;
+  if (!Number.isFinite(interventionState.context.attempt) || interventionState.context.attempt < 1) {
+    interventionState.context.attempt = 1;
+  }
+  queueEvent(interventionState, {
+    type: STREAM_INTERVENTION_EVENT_TYPES.STATUS,
+    phase: "request.accepted",
+    data: {
+      source_format: sourceFormat,
+      target_format: targetFormat,
+      stream
+    }
   });
 
   // Execute request
@@ -166,7 +188,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   // Streaming response
   const { onStreamComplete } = buildOnStreamComplete({ ...sharedCtx });
-  return handleStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, streamController, onStreamComplete });
+  return handleStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, streamController, onStreamComplete, streamInterventionState: interventionState });
 }
 
 export function isTokenExpiringSoon(expiresAt, bufferMs = 5 * 60 * 1000) {

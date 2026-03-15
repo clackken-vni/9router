@@ -17,6 +17,7 @@ import { detectFormatByEndpoint } from "open-sse/translator/formats.js";
 import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { getProjectIdForConnection } from "open-sse/services/projectId.js";
+import { createState, queueEvent, STREAM_INTERVENTION_EVENT_TYPES } from "open-sse/services/streamIntervention.js";
 
 /**
  * Handle chat completion request
@@ -55,6 +56,15 @@ export async function handleChat(request, clientRawRequest = null) {
   const effort = body.reasoning_effort || body.reasoning?.effort || null;
   log.request("POST", `${url.pathname} | ${modelStr} | ${msgCount} msgs${toolCount ? ` | ${toolCount} tools` : ""}${effort ? ` | effort=${effort}` : ""}`);
 
+  const streamInterventionState = body.stream === true
+    ? createState({
+      request_id: request.headers.get("x-request-id") || null,
+      provider: null,
+      model: modelStr,
+      attempt: 0
+    })
+    : null;
+
   // Log API key (masked)
   const authHeader = request.headers.get("Authorization");
   const apiKey = extractApiKey(request);
@@ -91,19 +101,19 @@ export async function handleChat(request, clientRawRequest = null) {
     return handleComboChat({
       body,
       models: comboModels,
-      handleSingleModel: (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey),
+      handleSingleModel: (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, streamInterventionState),
       log
     });
   }
 
   // Single model request
-  return handleSingleModelChat(body, modelStr, clientRawRequest, request, apiKey);
+  return handleSingleModelChat(body, modelStr, clientRawRequest, request, apiKey, streamInterventionState);
 }
 
 /**
  * Handle single model chat request
  */
-async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null) {
+async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, streamInterventionState = null) {
   const modelInfo = await getModelInfo(modelStr);
 
   // If provider is null, this might be a combo name - check and handle
@@ -133,11 +143,20 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
 
   // Extract userAgent from request
   const userAgent = request?.headers?.get("user-agent") || "";
+  const isStreamingRequest = body.stream === true;
+
+  if (streamInterventionState) {
+    streamInterventionState.context.provider = provider;
+    streamInterventionState.context.model = model;
+  }
 
   // Try with available accounts (fallback on errors)
   let excludeConnectionId = null;
   let lastError = null;
   let lastStatus = null;
+  let attemptNo = 0;
+  const providerAttempts = [];
+  let pendingSwitchFrom = null;
 
   while (true) {
     const credentials = await getProviderCredentials(provider, excludeConnectionId, model);
@@ -162,6 +181,46 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     const accountId = credentials.connectionId.slice(0, 8);
     log.info("AUTH", `Using ${provider} account: ${accountId}...`);
 
+    attemptNo += 1;
+    providerAttempts.push({
+      attempt: attemptNo,
+      provider,
+      model,
+      connection_id: accountId
+    });
+
+    if (streamInterventionState) {
+      streamInterventionState.context.provider_attempts = providerAttempts.slice();
+    }
+
+    if (isStreamingRequest && streamInterventionState) {
+      streamInterventionState.context.attempt = attemptNo;
+      if (pendingSwitchFrom) {
+        queueEvent(streamInterventionState, {
+          type: STREAM_INTERVENTION_EVENT_TYPES.STATUS,
+          phase: "provider.switched",
+          provider,
+          model,
+          attempt: attemptNo,
+          data: {
+            from: pendingSwitchFrom,
+            to: `${provider}/${model}`
+          }
+        });
+        pendingSwitchFrom = null;
+      }
+      queueEvent(streamInterventionState, {
+        type: STREAM_INTERVENTION_EVENT_TYPES.STATUS,
+        phase: "provider.attempt",
+        provider,
+        model,
+        attempt: attemptNo,
+        data: {
+          connection_id: accountId
+        }
+      });
+    }
+
     const refreshedCredentials = await checkAndRefreshToken(provider, credentials);
 
     // Ensure real project ID is available for providers that need it (P0 fix: cold miss)
@@ -184,6 +243,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       connectionId: credentials.connectionId,
       userAgent,
       apiKey,
+      streamInterventionState,
       // Detect source format by endpoint + body
       sourceFormatOverride: request?.url ? detectFormatByEndpoint(new URL(request.url).pathname, body) : null,
       onCredentialsRefreshed: async (newCreds) => {
@@ -206,6 +266,22 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
 
     if (shouldFallback) {
       log.warn("AUTH", `Account ${accountId}... unavailable (${result.status}), trying fallback`);
+      if (isStreamingRequest && streamInterventionState) {
+        const fromTarget = `${provider}/${model}`;
+        queueEvent(streamInterventionState, {
+          type: STREAM_INTERVENTION_EVENT_TYPES.STATUS,
+          phase: "provider.fallback",
+          provider,
+          model,
+          attempt: attemptNo,
+          data: {
+            reason: result.error || "upstream_error",
+            status_code: result.status,
+            from: fromTarget
+          }
+        });
+        pendingSwitchFrom = fromTarget;
+      }
       excludeConnectionId = credentials.connectionId;
       lastError = result.error;
       lastStatus = result.status;

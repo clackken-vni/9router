@@ -49,6 +49,7 @@ source/*
 docs/*
 !docs/ARCHITECTURE.md
 !docs/AMP_CLI_IMPLEMENTATION_REPORT.md
+!docs/STREAM_INTERVENTION_VERIFICATION.md
 test/*
 open-sse/test/*
 RM.vn.md
