@@ -16,28 +16,38 @@ function getAppName() {
 function getUserDataDir() {
   if (isCloud) return "/tmp"; // Fallback for Workers
 
-  if (process.env.DATA_DIR) return process.env.DATA_DIR;
+  const envDataDir = process.env.DATA_DIR?.trim();
+  if (envDataDir) {
+    try {
+      fs.mkdirSync(envDataDir, { recursive: true });
+      return envDataDir;
+    } catch (error) {
+      console.warn(`[localDb] DATA_DIR is not writable (${envDataDir}): ${error.message}`);
+    }
+  }
 
   const platform = process.platform;
   const homeDir = os.homedir();
   const appName = getAppName();
 
-  if (platform === "win32") {
-    return path.join(process.env.APPDATA || path.join(homeDir, "AppData", "Roaming"), appName);
-  } else {
-    // macOS & Linux: ~/.{appName}
-    return path.join(homeDir, `.${appName}`);
+  const defaultDir = platform === "win32"
+    ? path.join(process.env.APPDATA || path.join(homeDir, "AppData", "Roaming"), appName)
+    : path.join(homeDir, `.${appName}`);
+
+  try {
+    fs.mkdirSync(defaultDir, { recursive: true });
+    return defaultDir;
+  } catch (error) {
+    const fallbackDir = path.join(os.tmpdir(), appName);
+    fs.mkdirSync(fallbackDir, { recursive: true });
+    console.warn(`[localDb] Falling back to temp data dir: ${fallbackDir}`);
+    return fallbackDir;
   }
 }
 
 // Data file path - stored in user home directory
 const DATA_DIR = getUserDataDir();
 const DB_FILE = isCloud ? null : path.join(DATA_DIR, "db.json");
-
-// Ensure data directory exists
-if (!isCloud && !fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
 
 // Default data structure
 const defaultData = {

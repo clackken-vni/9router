@@ -27,23 +27,32 @@ function getAppName() {
 function getUserDataDir() {
   if (isCloud) return "/tmp"; // Fallback for Workers
 
-  if (process.env.DATA_DIR) return process.env.DATA_DIR;
+  const envDataDir = process.env.DATA_DIR?.trim();
+  if (envDataDir) {
+    try {
+      fs.mkdirSync(envDataDir, { recursive: true });
+      return envDataDir;
+    } catch (error) {
+      console.warn(`[usageDb] DATA_DIR is not writable (${envDataDir}): ${error.message}`);
+    }
+  }
 
   try {
     const platform = process.platform;
     const homeDir = os.homedir();
     const appName = getAppName();
 
-    if (platform === "win32") {
-      return path.join(process.env.APPDATA || path.join(homeDir, "AppData", "Roaming"), appName);
-    } else {
-      // macOS & Linux: ~/.{appName}
-      return path.join(homeDir, `.${appName}`);
-    }
+    const defaultDir = platform === "win32"
+      ? path.join(process.env.APPDATA || path.join(homeDir, "AppData", "Roaming"), appName)
+      : path.join(homeDir, `.${appName}`);
+
+    fs.mkdirSync(defaultDir, { recursive: true });
+    return defaultDir;
   } catch (error) {
     console.error("[usageDb] Failed to get user data directory:", error.message);
-    // Fallback to cwd if homedir fails
-    return path.join(process.cwd(), ".9router");
+    const fallbackDir = path.join(os.tmpdir(), "9router");
+    fs.mkdirSync(fallbackDir, { recursive: true });
+    return fallbackDir;
   }
 }
 
@@ -51,18 +60,6 @@ function getUserDataDir() {
 const DATA_DIR = getUserDataDir();
 const DB_FILE = isCloud ? null : path.join(DATA_DIR, "usage.json");
 const LOG_FILE = isCloud ? null : path.join(DATA_DIR, "log.txt");
-
-// Ensure data directory exists
-if (!isCloud && fs && typeof fs.existsSync === "function") {
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-      console.log(`[usageDb] Created data directory: ${DATA_DIR}`);
-    }
-  } catch (error) {
-    console.error("[usageDb] Failed to create data directory:", error.message);
-  }
-}
 
 // Default data structure
 const defaultData = {

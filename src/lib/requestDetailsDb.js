@@ -19,16 +19,32 @@ function getAppName() {
 
 function getUserDataDir() {
   if (isCloud) return "/tmp";
-  if (process.env.DATA_DIR) return process.env.DATA_DIR;
+
+  const envDataDir = process.env.DATA_DIR?.trim();
+  if (envDataDir) {
+    try {
+      fs.mkdirSync(envDataDir, { recursive: true });
+      return envDataDir;
+    } catch (error) {
+      console.warn(`[requestDetailsDb] DATA_DIR is not writable (${envDataDir}): ${error.message}`);
+    }
+  }
 
   const platform = process.platform;
   const homeDir = os.homedir();
   const appName = getAppName();
+  const defaultDir = platform === "win32"
+    ? path.join(process.env.APPDATA || path.join(homeDir, "AppData", "Roaming"), appName)
+    : path.join(homeDir, `.${appName}`);
 
-  if (platform === "win32") {
-    return path.join(process.env.APPDATA || path.join(homeDir, "AppData", "Roaming"), appName);
+  try {
+    fs.mkdirSync(defaultDir, { recursive: true });
+    return defaultDir;
+  } catch {
+    const fallbackDir = path.join(os.tmpdir(), appName);
+    fs.mkdirSync(fallbackDir, { recursive: true });
+    return fallbackDir;
   }
-  return path.join(homeDir, `.${appName}`);
 }
 
 const DATA_DIR = getUserDataDir();
