@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import PropTypes from "prop-types";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
@@ -26,6 +26,9 @@ export default function ProviderDetailPage() {
   const [showBulkProxyModal, setShowBulkProxyModal] = useState(false);
   const [selectedConnection, setSelectedConnection] = useState(null);
   const [modelAliases, setModelAliases] = useState({});
+  const [remoteModels, setRemoteModels] = useState([]);
+  const [loadingRemoteModels, setLoadingRemoteModels] = useState(false);
+  const [remoteModelsWarning, setRemoteModelsWarning] = useState("");
   const [headerImgError, setHeaderImgError] = useState(false);
   const [modelTestResults, setModelTestResults] = useState({});
   const [modelsTestError, setModelsTestError] = useState("");
@@ -51,6 +54,10 @@ export default function ProviderDetailPage() {
     : (OAUTH_PROVIDERS[providerId] || APIKEY_PROVIDERS[providerId] || FREE_PROVIDERS[providerId]);
   const isOAuth = !!OAUTH_PROVIDERS[providerId] || !!FREE_PROVIDERS[providerId];
   const models = getModelsByProviderId(providerId);
+  const allProviderModels = useMemo(
+    () => (remoteModels.length > 0 ? remoteModels : models),
+    [remoteModels, models]
+  );
   const providerAlias = getProviderAlias(providerId);
   
   const isOpenAICompatible = isOpenAICompatibleProvider(providerId);
@@ -188,6 +195,81 @@ export default function ProviderDetailPage() {
     fetchConnections();
     fetchAliases();
   }, [fetchConnections, fetchAliases]);
+
+  const fetchRemoteModels = useCallback(async () => {
+    if (isCompatible || providerInfo?.passthroughModels) {
+      setRemoteModels([]);
+      setRemoteModelsWarning("");
+      return;
+    }
+
+    if (connections.length === 0) {
+      setRemoteModels([]);
+      setRemoteModelsWarning("");
+      return;
+    }
+
+    const activeConnections = connections.filter((c) => c.isActive !== false);
+    const fallbackConnections = activeConnections.length > 0 ? activeConnections : connections;
+
+    setLoadingRemoteModels(true);
+    setRemoteModelsWarning("");
+
+    try {
+      const responses = await Promise.all(
+        fallbackConnections.map(async (connection) => {
+          const res = await fetch(`/api/providers/${connection.id}/models`, { cache: "no-store" });
+          const data = await res.json().catch(() => ({}));
+          return { ok: res.ok, status: res.status, data };
+        })
+      );
+
+      const remoteModelMap = new Map();
+      const warnings = [];
+
+      responses.forEach(({ ok, status, data }) => {
+        if (!ok) {
+          warnings.push(data?.error || `Failed to fetch models (${status})`);
+          return;
+        }
+
+        if (data?.warning) warnings.push(data.warning);
+
+        (data?.models || []).forEach((item) => {
+          const id = item?.id || item?.name || item?.model;
+          if (!id) return;
+          if (!remoteModelMap.has(id)) {
+            remoteModelMap.set(id, {
+              id,
+              name: item?.displayName || item?.name || id,
+              type: item?.type,
+            });
+          }
+        });
+      });
+
+      const mergedModels = Array.from(remoteModelMap.values());
+      if (mergedModels.length > 0) {
+        setRemoteModels(mergedModels);
+      } else {
+        setRemoteModels([]);
+      }
+
+      if (warnings.length > 0) {
+        setRemoteModelsWarning(warnings[0]);
+      }
+    } catch (error) {
+      console.log("Error fetching remote models:", error);
+      setRemoteModels([]);
+      setRemoteModelsWarning("Failed to fetch models from provider");
+    } finally {
+      setLoadingRemoteModels(false);
+    }
+  }, [connections, isCompatible, providerInfo?.passthroughModels]);
+
+  useEffect(() => {
+    fetchRemoteModels();
+  }, [fetchRemoteModels]);
 
   const handleSetAlias = async (modelId, alias, providerAliasOverride = providerAlias) => {
     const fullModel = `${providerAliasOverride}/${modelId}`;
@@ -560,7 +642,7 @@ export default function ProviderDetailPage() {
         if (!fullModel.startsWith(prefix)) return false;
         const modelId = fullModel.slice(prefix.length);
         // Only show if not already in hardcoded list
-        return !models.some((m) => m.id === modelId) && alias === modelId;
+        return !allProviderModels.some((m) => m.id === modelId) && alias === modelId;
       })
       .map(([alias, fullModel]) => ({
         id: fullModel.slice(`${providerStorageAlias}/`.length),
@@ -570,7 +652,7 @@ export default function ProviderDetailPage() {
 
     return (
       <div className="flex flex-wrap gap-3">
-        {models.map((model) => {
+        {allProviderModels.map((model) => {
           const fullModel = `${providerStorageAlias}/${model.id}`;
           const oldFormatModel = `${providerId}/${model.id}`;
           const existingAlias = Object.entries(modelAliases).find(
@@ -832,9 +914,15 @@ export default function ProviderDetailPage() {
           <h2 className="text-lg font-semibold">
             {providerInfo.passthroughModels ? "Model Aliases" : "Available Models"}
           </h2>
+          {!providerInfo.passthroughModels && !isCompatible && loadingRemoteModels && (
+            <span className="text-xs text-text-muted">Syncing models...</span>
+          )}
         </div>
         {!!modelsTestError && (
           <p className="text-xs text-red-500 mb-3 break-words">{modelsTestError}</p>
+        )}
+        {!!remoteModelsWarning && !modelsTestError && (
+          <p className="text-xs text-amber-500 mb-3 break-words">{remoteModelsWarning}</p>
         )}
         {renderModelsSection()}
       </Card>

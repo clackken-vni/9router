@@ -35,6 +35,47 @@ const parseGeminiCliModels = (data) => {
   return [];
 };
 
+async function fetchGeminiModelsPaginated(apiKey) {
+  const headers = { "Content-Type": "application/json" };
+  let pageToken = "";
+  const allModels = [];
+  const seen = new Set();
+
+  for (let i = 0; i < 20; i += 1) {
+    const url = new URL("https://generativelanguage.googleapis.com/v1beta/models");
+    url.searchParams.set("key", apiKey);
+    url.searchParams.set("pageSize", "1000");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+
+    const response = await fetch(url.toString(), { method: "GET", headers });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Gemini models fetch failed: ${response.status} ${errorText}`);
+    }
+
+    const data = await response.json();
+    (data?.models || []).forEach((model) => {
+      const rawId = model?.name || model?.id || model?.model;
+      if (!rawId) return;
+      const normalizedId = typeof rawId === "string" && rawId.startsWith("models/")
+        ? rawId.slice("models/".length)
+        : rawId;
+      if (!normalizedId || seen.has(normalizedId)) return;
+      seen.add(normalizedId);
+      allModels.push({
+        id: normalizedId,
+        name: model?.displayName || normalizedId,
+        type: model?.type,
+      });
+    });
+
+    if (!data?.nextPageToken) break;
+    pageToken = data.nextPageToken;
+  }
+
+  return allModels;
+}
+
 const createOpenAIModelsConfig = (url) => ({
   url,
   method: "GET",
@@ -378,6 +419,28 @@ export async function GET(request, { params }) {
         models: [],
         warning,
       });
+    }
+
+    if (connection.provider === "gemini") {
+      const apiKey = connection.apiKey;
+      if (!apiKey) {
+        return NextResponse.json({ error: "No valid token found" }, { status: 401 });
+      }
+
+      try {
+        const models = await fetchGeminiModelsPaginated(apiKey);
+        return NextResponse.json({
+          provider: connection.provider,
+          connectionId: connection.id,
+          models,
+        });
+      } catch (error) {
+        console.log("Failed to fetch Gemini models dynamically:", error.message || error);
+        return NextResponse.json(
+          { error: "Failed to fetch Gemini models" },
+          { status: 502 }
+        );
+      }
     }
 
     const config = PROVIDER_MODELS_CONFIG[connection.provider];
