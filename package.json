@@ -8,6 +8,10 @@
     "build": "NODE_ENV=production next build --webpack",
     "prestart": "node ./scripts/prepare-standalone.js",
     "start": "NODE_ENV=production node --env-file=.env ./.next/standalone/server.js",
+    "nohup:start": "nohup npm start > nohup.out 2>&1 & echo $! > .nohup.pid",
+    "nohup:stop": "sh -c 'if [ -f .nohup.pid ]; then kill \"$(cat .nohup.pid)\" >/dev/null 2>&1 || true; rm -f .nohup.pid >/dev/null 2>&1 || true; fi'",
+    "nohup:kill": "npm run nohup:stop >/dev/null 2>&1 || true",
+    "nohup:logs": "tail -f nohup.out",
     "dev:bun": "bun --bun next dev --webpack --port 20128",
     "build:bun": "NODE_ENV=production bun --bun next build --webpack",
     "start:bun": "bun ./.next/standalone/server.js"
